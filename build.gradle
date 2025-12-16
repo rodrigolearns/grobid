@@ -26,6 +26,8 @@ repositories {
 
 def getJavaLibraryPath = {
     def jepLocalLibraries = ""
+    def pathSeparator = File.pathSeparator
+    
     if (Os.isFamily(Os.FAMILY_MAC)) {
         if (Os.OS_ARCH.equals("aarch64")) {
             jepLocalLibraries = "${file("./grobid-home/lib/mac_arm-64").absolutePath}"
@@ -35,11 +37,15 @@ def getJavaLibraryPath = {
     } else if (Os.isFamily(Os.FAMILY_UNIX)) {
         jepLocalLibraries = "${rootProject.rootDir.getAbsolutePath()}/grobid-home/lib/lin-64/jep:" +
             "${rootProject.rootDir.getAbsolutePath()}/grobid-home/lib/lin-64"
+    } else if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+        // Windows support: use win-64 or win-32 based on architecture
+        def winArch = System.getProperty("os.arch").contains("64") ? "win-64" : "win-32"
+        jepLocalLibraries = "${file("./grobid-home/lib/${winArch}").absolutePath}"
     } else {
         throw new RuntimeException("Unsupported platform!")
     }
 
-    def javaLibraryPath = "${System.getProperty('java.library.path')}:${jepLocalLibraries}"
+    def javaLibraryPath = "${System.getProperty('java.library.path')}${pathSeparator}${jepLocalLibraries}"
 
     def envPrefix = ""
     if (System.env.CONDA_PREFIX) {
@@ -53,7 +59,7 @@ def getJavaLibraryPath = {
         def pythonDirectory = file(envLibs).listFiles({ it.toString().contains("/lib/python") } as FileFilter)?.first()
         def pythonVersion = (pythonDirectory =~ /python([0-9]\.[0-9]+)/)[0][1]
 
-        javaLibraryPath += ":${envLibs}:${envLibs}/python${pythonVersion}/site-packages/jep"
+        javaLibraryPath += "${pathSeparator}${envLibs}${pathSeparator}${envLibs}/python${pythonVersion}/site-packages/jep"
     }
     return javaLibraryPath
 }
@@ -526,6 +532,8 @@ project(":grobid-trainer") {
     ]
 
     def libraries = ""
+    def pathSeparator = File.pathSeparator
+    
     if (Os.isFamily(Os.FAMILY_MAC)) {
         if (Os.OS_ARCH.equals("aarch64")) {
             libraries = "${file("../grobid-home/lib/mac_arm-64").absolutePath}"
@@ -535,6 +543,10 @@ project(":grobid-trainer") {
     } else if (Os.isFamily(Os.FAMILY_UNIX)) {
         libraries = "${file("../grobid-home/lib/lin-64/jep").absolutePath}:" +
             "${file("../grobid-home/lib/lin-64").absolutePath}:"
+    } else if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+        // Windows support: use win-64 or win-32 based on architecture
+        def winArch = System.getProperty("os.arch").contains("64") ? "win-64" : "win-32"
+        libraries = "${file("../grobid-home/lib/${winArch}").absolutePath}${pathSeparator}"
     } else {
         throw new RuntimeException("Unsupported platform!")
     }

@@ -144,10 +144,14 @@ public class DocumentSource {
             cmd.add(pdfPath.getAbsolutePath());
             cmd.add(tmpPathXML.getAbsolutePath());
             if (GrobidProperties.isContextExecutionServer()) {
-                cmd.add("--timeout");
-                cmd.add(String.valueOf(GrobidProperties.getPdfaltoTimeoutS()));
-                cmd.add("--ulimit");
-                cmd.add(String.valueOf(GrobidProperties.getPdfaltoMemoryLimitMb() * 1024));
+                // pdfalto 0.4 on Windows doesn't support --timeout and --ulimit flags
+                // These are only available in the Linux/Mac builds
+                if (!SystemUtils.IS_OS_WINDOWS) {
+                    cmd.add("--timeout");
+                    cmd.add(String.valueOf(GrobidProperties.getPdfaltoTimeoutS()));
+                    cmd.add("--ulimit");
+                    cmd.add(String.valueOf(GrobidProperties.getPdfaltoMemoryLimitMb() * 1024));
+                }
                 tmpPathXML = processPdfaltoServerMode(pdfPath, tmpPathXML, cmd);
             } else {
                 if (!SystemUtils.IS_OS_WINDOWS && !SystemUtils.IS_OS_MAC) {

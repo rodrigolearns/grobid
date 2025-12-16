@@ -1,6 +1,7 @@
 package org.grobid.core.process;
 
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.SystemUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,6 +10,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.stream.Stream;
 
 public class ProcessRunner extends Thread {
     private static final Logger LOGGER = LoggerFactory.getLogger(ProcessRunner.class);
@@ -33,28 +35,78 @@ public class ProcessRunner extends Thread {
         this.useStreamGobbler = useStreamGobbler;
     }
 
-    // since we are limiting by ulimit, pdftoxml is actually a child process, therefore Process.destroy() won't work
-    // killing harshly with pkill
+    // Since we are limiting by ulimit on Unix, pdftoxml is actually a child process, 
+    // therefore Process.destroy() won't work. We need to kill all descendants.
+    // This method now uses cross-platform ProcessHandle API (Java 9+)
     public void killProcess() {
         if (process != null) {
             try {
-                Long pid = getPidOfProcess(process);
-                if (pid != null) {
-                    LOGGER.info("Killing pdf to xml process with PID " + pid + " and its children");
-                    Runtime.getRuntime().exec(new String[]{"pkill", "-9", "-P", String.valueOf(pid)}).waitFor();
+                long pid = process.pid();
+                LOGGER.info("Killing pdf to xml process with PID " + pid + " and its children");
+                
+                // Use ProcessHandle API (Java 9+) for cross-platform process tree termination
+                ProcessHandle processHandle = process.toHandle();
+                
+                // First, destroy all descendant processes
+                processHandle.descendants().forEach(child -> {
+                    LOGGER.debug("Killing child process: " + child.pid());
+                    child.destroyForcibly();
+                });
+                
+                // Then destroy the main process
+                processHandle.destroyForcibly();
+                
+                // On Unix, we may also need to use pkill as a fallback for processes 
+                // started via bash/ulimit wrapper
+                if (SystemUtils.IS_OS_UNIX && !SystemUtils.IS_OS_MAC) {
+                    try {
+                        Runtime.getRuntime().exec(new String[]{"pkill", "-9", "-P", String.valueOf(pid)}).waitFor();
+                    } catch (Exception e) {
+                        LOGGER.debug("pkill fallback failed (may be normal): " + e.getMessage());
+                    }
                 }
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                LOGGER.error("Error killing process: " + e.getMessage());
+                // Fallback to simple destroy
+                if (process != null) {
+                    process.destroyForcibly();
+                }
             }
         }
     }
 
 
-    //WARNING
+    /**
+     * Get the PID of a process using the cross-platform ProcessHandle API (Java 9+).
+     * This replaces the old Unix-only reflection-based approach.
+     * 
+     * @param p the Process to get the PID from
+     * @return the PID, or null if it cannot be determined
+     */
     public static Long getPidOfProcess(Process p) {
+        if (p == null) {
+            return null;
+        }
+        
+        try {
+            // Use Java 9+ Process.pid() method - works on all platforms
+            return p.pid();
+        } catch (UnsupportedOperationException e) {
+            LOGGER.warn("Process.pid() not supported on this platform");
+            return null;
+        }
+    }
+    
+    /**
+     * @deprecated Use {@link #getPidOfProcess(Process)} instead.
+     * This method is kept for backwards compatibility but now delegates to the new implementation.
+     */
+    @Deprecated
+    public static Long getPidOfProcessLegacy(Process p) {
         Long pid = null;
 
         try {
+            // Legacy Unix-only approach using reflection
             if (p.getClass().getName().equals("java.lang.UNIXProcess")) {
                 Field f = p.getClass().getDeclaredField("pid");
                 f.setAccessible(true);

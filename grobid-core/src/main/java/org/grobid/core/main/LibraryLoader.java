@@ -142,34 +142,90 @@ public class LibraryLoader {
                 }
             }
 
-            if (CollectionUtils.containsAny(distinctModels, Collections.singletonList(GrobidCRFEngine.DELFT))) {
-                LOGGER.info("Loading JEP native library for DeLFT... " + libraryFolder.getAbsolutePath());
-                // actual loading will be made at JEP initialization, so we just need to add the path in the 
-                // java.library.path (JEP will anyway try to load from java.library.path, so explicit file 
-                // loading here will not help)
-                try {
+        if (CollectionUtils.containsAny(distinctModels, Collections.singletonList(GrobidCRFEngine.DELFT))) {
+            LOGGER.info("Loading JEP native library for DeLFT... " + libraryFolder.getAbsolutePath());
+            // actual loading will be made at JEP initialization, so we just need to add the path in the 
+            // java.library.path (JEP will anyway try to load from java.library.path, so explicit file 
+            // loading here will not help)
+            try {
 
-                    PythonEnvironmentConfig pythonEnvironmentConfig = PythonEnvironmentConfig.getInstance();
-                    if (pythonEnvironmentConfig.isEmpty()) {
-                        LOGGER.info("No python environment configured");
-                    } else {
-                        if (SystemUtils.IS_OS_MAC) {
-                            System.loadLibrary("python" + pythonEnvironmentConfig.getPythonVersion());
-                            System.loadLibrary(DELFT_NATIVE_LIB_NAME);
-                        } else if (SystemUtils.IS_OS_LINUX) {
-                            System.loadLibrary(DELFT_NATIVE_LIB_NAME);
-                        } else if (SystemUtils.IS_OS_WINDOWS) {
-                            throw new UnsupportedOperationException("Delft on Windows is not supported.");
-                        }
+                PythonEnvironmentConfig pythonEnvironmentConfig = PythonEnvironmentConfig.getInstance();
+                if (pythonEnvironmentConfig.isEmpty()) {
+                    LOGGER.info("No python environment configured");
+                } else {
+                    if (SystemUtils.IS_OS_MAC) {
+                        System.loadLibrary("python" + pythonEnvironmentConfig.getPythonVersion());
+                        System.loadLibrary(DELFT_NATIVE_LIB_NAME);
+                    } else if (SystemUtils.IS_OS_LINUX) {
+                        System.loadLibrary(DELFT_NATIVE_LIB_NAME);
+                    } else if (SystemUtils.IS_OS_WINDOWS) {
+                        // Windows DeLFT/JEP support
+                        LOGGER.info("Loading JEP for Windows...");
+                        loadJepForWindows(pythonEnvironmentConfig);
                     }
-
-                } catch (Exception e) {
-                    throw new GrobidException("Loading JEP native library for DeLFT failed", e);
                 }
+
+            } catch (Exception e) {
+                throw new GrobidException("Loading JEP native library for DeLFT failed", e);
             }
+        }
 
             loaded = true;
             LOGGER.info("Native library for sequence labelling loaded");
+        }
+    }
+
+    /**
+     * Load JEP native library for Windows.
+     * On Windows, JEP is installed via pip and the jep.dll is located in site-packages/jep/
+     */
+    private static void loadJepForWindows(PythonEnvironmentConfig pythonConfig) {
+        Path jepPath = pythonConfig.getJepPath();
+        if (jepPath == null || !Files.exists(jepPath)) {
+            throw new GrobidException("JEP not found. Please install JEP in your Python environment: pip install jep. " +
+                "Expected location: " + jepPath);
+        }
+        
+        // On Windows, JEP installs as jep.dll in the jep package directory
+        Path jepDll = jepPath.resolve("jep.dll");
+        if (!Files.exists(jepDll)) {
+            // Try alternative name patterns
+            File[] jepFiles = jepPath.toFile().listFiles(
+                (dir, name) -> name.toLowerCase().startsWith("jep") && name.toLowerCase().endsWith(".dll")
+            );
+            
+            if (jepFiles != null && jepFiles.length > 0) {
+                jepDll = jepFiles[0].toPath();
+                LOGGER.info("Found JEP DLL: " + jepDll);
+            } else {
+                throw new GrobidException("Cannot find jep.dll in: " + jepPath + 
+                    ". Please ensure JEP is installed: pip install jep");
+            }
+        }
+        
+        LOGGER.info("Loading Windows JEP library from: " + jepDll);
+        
+        try {
+            // Load the JEP DLL
+            System.load(jepDll.toAbsolutePath().toString());
+            LOGGER.info("Successfully loaded JEP for Windows");
+        } catch (UnsatisfiedLinkError e) {
+            // JEP might need Python DLL to be loaded first
+            LOGGER.info("Direct JEP load failed, attempting to load Python first...");
+            try {
+                // Try loading Python DLL - it should be on the system PATH if Python is installed correctly
+                String pythonVersion = pythonConfig.getPythonVersion().replace(".", "");
+                String pythonDllName = "python" + pythonVersion;
+                LOGGER.info("Attempting to load: " + pythonDllName);
+                System.loadLibrary(pythonDllName);
+                
+                // Now try JEP again
+                System.load(jepDll.toAbsolutePath().toString());
+                LOGGER.info("Successfully loaded JEP for Windows (after loading Python)");
+            } catch (UnsatisfiedLinkError e2) {
+                throw new GrobidException("Failed to load JEP on Windows. Ensure Python is installed and on PATH. " +
+                    "Error: " + e2.getMessage(), e2);
+            }
         }
     }
 
