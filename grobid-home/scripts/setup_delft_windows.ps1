@@ -231,9 +231,27 @@ function Install-Packages {
     Write-Success "TensorFlow installed"
     
     Write-Step "Installing JEP..."
+
+    # JEP requires a JDK and JAVA_HOME. If JAVA_HOME is missing, try to derive it from javac.
+    if (-not $env:JAVA_HOME) {
+        try {
+            $javacCmd = Get-Command javac -ErrorAction SilentlyContinue
+            if ($javacCmd -and (Test-Path $javacCmd.Source)) {
+                $binDir = Split-Path -Parent $javacCmd.Source
+                $javaHome = Split-Path -Parent $binDir
+                if (Test-Path (Join-Path $javaHome "bin\\javac.exe")) {
+                    $env:JAVA_HOME = $javaHome
+                    Write-Info "JAVA_HOME was not set; derived JAVA_HOME=$javaHome"
+                }
+            }
+        } catch {
+            # fall through to the normal error message from pip/jep
+        }
+    }
     if (-not $env:JAVA_HOME) {
         Write-Info "JAVA_HOME is not set. If JEP fails to build, set JAVA_HOME to your JDK path and retry."
     }
+
     & $pip install jep==4.2.0 --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-Info "JEP 4.2.0 failed, trying latest version..."
