@@ -319,10 +319,16 @@ function Install-DeLFTFromRepo {
     }
 
     Write-Step "Installing DeLFT from cloned repository (editable install)..."
-    & $pip install -e "$DelftRepoPath" --quiet
+    # Prefer legacy editable install to avoid PEP517 build isolation issues on Windows
+    # (some build dependencies like scikit-learn can fail metadata generation in isolated builds).
+    & $pip install -e "$DelftRepoPath" --no-build-isolation --no-use-pep517 --quiet
     if ($LASTEXITCODE -ne 0) {
-        Write-Error2 "Failed to install DeLFT from repo"
-        return $false
+        Write-Info "Legacy editable install failed; trying PEP517 editable install..."
+        & $pip install -e "$DelftRepoPath" --quiet
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error2 "Failed to install DeLFT from repo"
+            return $false
+        }
     }
 
     Write-Success "DeLFT installed from repo"
