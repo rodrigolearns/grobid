@@ -299,7 +299,7 @@ function Install-Packages {
     Write-Success "JEP installed"
 
     Write-Step "Installing additional dependencies..."
-    & $pip install numpy scikit-learn lxml --quiet
+    & $pip install numpy scikit-learn lxml regex --quiet
     Write-Success "Additional dependencies installed"
     
     return $true
@@ -311,27 +311,28 @@ function Install-DeLFTFromRepo {
         [string]$DelftRepoPath
     )
 
-    $pip = "$VenvPath\Scripts\pip.exe"
+    # Do NOT rely on DeLFT's pinned install_requires on Windows, which can force
+    # source builds of old scikit-learn/numpy versions. Instead, add the cloned repo
+    # to the venv via a .pth file and install runtime dependencies separately.
 
-    if (-not (Test-Path "$DelftRepoPath\setup.py") -and -not (Test-Path "$DelftRepoPath\pyproject.toml")) {
-        Write-Error2 "DeLFT repository does not look installable (missing setup.py/pyproject.toml): $DelftRepoPath"
+    $python = "$VenvPath\Scripts\python.exe"
+
+    if (-not (Test-Path "$DelftRepoPath\delft\sequenceLabelling\__init__.py")) {
+        Write-Error2 "DeLFT repository is missing expected Python package layout: $DelftRepoPath"
         return $false
     }
 
-    Write-Step "Installing DeLFT from cloned repository (editable install)..."
-    # Prefer legacy editable install to avoid PEP517 build isolation issues on Windows
-    # (some build dependencies like scikit-learn can fail metadata generation in isolated builds).
-    & $pip install -e "$DelftRepoPath" --no-build-isolation --no-use-pep517 --quiet
-    if ($LASTEXITCODE -ne 0) {
-        Write-Info "Legacy editable install failed; trying PEP517 editable install..."
-        & $pip install -e "$DelftRepoPath" --quiet
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error2 "Failed to install DeLFT from repo"
-            return $false
-        }
+    $sitePackages = & $python -c "import site; print(site.getsitepackages()[0])" 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $sitePackages) {
+        Write-Error2 "Failed to determine venv site-packages path"
+        return $false
     }
 
-    Write-Success "DeLFT installed from repo"
+    $pthFile = Join-Path $sitePackages "grobid-delft-repo.pth"
+    Write-Step "Registering DeLFT repo in venv (pth): $pthFile"
+    Set-Content -Path $pthFile -Value $DelftRepoPath -Encoding ASCII
+
+    Write-Success "DeLFT repo registered in venv"
     return $true
 }
 
