@@ -36,6 +36,7 @@ param(
     [switch]$SkipPythonInstall,
     [switch]$Force,
     [switch]$NonInteractive,
+    [switch]$InstallBuildTools,
     [switch]$Help
 )
 
@@ -175,6 +176,31 @@ function Install-PythonViaChocolatey {
     return $false
 }
 
+function Install-VcBuildToolsViaChocolatey {
+    Write-Step "Installing Visual C++ Build Tools (required for JEP) via Chocolatey..."
+
+    $choco = Get-Command choco -ErrorAction SilentlyContinue
+    if (-not $choco) {
+        Write-Error2 "Chocolatey not found. Install Chocolatey or install Visual C++ Build Tools manually."
+        return $false
+    }
+
+    if (-not (Test-Administrator)) {
+        Write-Error2 "Administrator privileges are required to install Visual C++ Build Tools via Chocolatey."
+        return $false
+    }
+
+    # This is large and can take several minutes.
+    & choco install visualstudio2022buildtools visualstudio2022-workload-vctools -y --no-progress
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error2 "Chocolatey failed to install Visual C++ Build Tools."
+        return $false
+    }
+
+    Write-Success "Visual C++ Build Tools installed (or already present)"
+    return $true
+}
+
 function New-VirtualEnvironment {
     param(
         [string]$PythonCommand,
@@ -231,6 +257,14 @@ function Install-Packages {
     Write-Success "TensorFlow installed"
     
     Write-Step "Installing JEP..."
+
+    if ($InstallBuildTools) {
+        $ok = Install-VcBuildToolsViaChocolatey
+        if (-not $ok) {
+            Write-Error2 "Cannot proceed with JEP install without Visual C++ Build Tools."
+            return $false
+        }
+    }
 
     # JEP requires a JDK and JAVA_HOME. If JAVA_HOME is missing, try to derive it from javac.
     if (-not $env:JAVA_HOME) {
