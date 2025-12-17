@@ -35,6 +35,7 @@ param(
     [string]$PythonVersion = "3.10",
     [switch]$SkipPythonInstall,
     [switch]$Force,
+    [switch]$NonInteractive,
     [switch]$Help
 )
 
@@ -212,8 +213,17 @@ function Install-Packages {
     Write-Step "Upgrading pip..."
     & $python -m pip install --upgrade pip --quiet
     
-    Write-Step "Installing TensorFlow (this may take a few minutes)..."
-    & $pip install tensorflow --quiet
+    # Pick a conservative TensorFlow version based on the Python version.
+    # - Python >= 3.12 requires TF >= 2.16
+    # - Python <= 3.11 works with TF 2.15.x on Windows (CPU)
+    $pyVer = & $python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+    $tfSpec = "tensorflow==2.15.*"
+    if ($pyVer -match '^3\.12$') {
+        $tfSpec = "tensorflow==2.16.*"
+    }
+
+    Write-Step "Installing TensorFlow ($tfSpec) (this may take a few minutes)..."
+    & $pip install $tfSpec --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-Error2 "Failed to install TensorFlow"
         return $false
@@ -221,6 +231,9 @@ function Install-Packages {
     Write-Success "TensorFlow installed"
     
     Write-Step "Installing JEP..."
+    if (-not $env:JAVA_HOME) {
+        Write-Info "JAVA_HOME is not set. If JEP fails to build, set JAVA_HOME to your JDK path and retry."
+    }
     & $pip install jep==4.2.0 --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-Info "JEP 4.2.0 failed, trying latest version..."
@@ -232,19 +245,35 @@ function Install-Packages {
         }
     }
     Write-Success "JEP installed"
-    
-    Write-Step "Installing DeLFT..."
-    & $pip install delft --quiet
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error2 "Failed to install DeLFT"
-        return $false
-    }
-    Write-Success "DeLFT installed"
-    
+
     Write-Step "Installing additional dependencies..."
     & $pip install numpy scikit-learn lxml --quiet
     Write-Success "Additional dependencies installed"
     
+    return $true
+}
+
+function Install-DeLFTFromRepo {
+    param(
+        [string]$VenvPath,
+        [string]$DelftRepoPath
+    )
+
+    $pip = "$VenvPath\Scripts\pip.exe"
+
+    if (-not (Test-Path "$DelftRepoPath\setup.py") -and -not (Test-Path "$DelftRepoPath\pyproject.toml")) {
+        Write-Error2 "DeLFT repository does not look installable (missing setup.py/pyproject.toml): $DelftRepoPath"
+        return $false
+    }
+
+    Write-Step "Installing DeLFT from cloned repository (editable install)..."
+    & $pip install -e "$DelftRepoPath" --quiet
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error2 "Failed to install DeLFT from repo"
+        return $false
+    }
+
+    Write-Success "DeLFT installed from repo"
     return $true
 }
 
@@ -300,25 +329,70 @@ function Update-GrobidConfig {
     $venvAbsolute = [System.IO.Path]::GetFullPath($VenvPath)
     $delftAbsolute = [System.IO.Path]::GetFullPath($DelftPath)
     
-    # Read the config
-    $content = Get-Content $ConfigPath -Raw
-    
-    # Update delft.install path
-    if ($content -match '(?m)^(\s*install:\s*)"[^"]*"') {
-        $content = $content -replace '(?m)^(\s*install:\s*)"[^"]*"', "`$1`"$delftAbsolute`""
-    } elseif ($content -match '(?m)^(\s*install:\s*)[^\r\n]+') {
-        $content = $content -replace '(?m)^(\s*install:\s*)[^\r\n]+', "`$1`"$delftAbsolute`""
+    # Update only within the "grobid -> delft" block to avoid accidental replacements elsewhere.
+    $lines = Get-Content $ConfigPath
+    $delftLineIdx = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*delft:\s*$') {
+            $delftLineIdx = $i
+            break
+        }
     }
-    
-    # Update pythonVirtualEnv path
-    if ($content -match '(?m)^(\s*pythonVirtualEnv:\s*)$') {
-        $content = $content -replace '(?m)^(\s*pythonVirtualEnv:\s*)$', "`$1`"$venvAbsolute`""
-    } elseif ($content -match '(?m)^(\s*pythonVirtualEnv:\s*)[^\r\n]*') {
-        $content = $content -replace '(?m)^(\s*pythonVirtualEnv:\s*)[^\r\n]*', "`$1`"$venvAbsolute`""
+
+    if ($delftLineIdx -lt 0) {
+        Write-Error2 "Could not find 'delft:' section in $ConfigPath"
+        return $false
     }
-    
-    # Write back
-    $content | Set-Content $ConfigPath -NoNewline
+
+    $delftIndent = ($lines[$delftLineIdx] -replace '(\S.*)$','').Length
+    $endIdx = $lines.Count
+    for ($j = $delftLineIdx + 1; $j -lt $lines.Count; $j++) {
+        $indent = ($lines[$j] -replace '(\S.*)$','').Length
+        if ($lines[$j].Trim() -ne "" -and $indent -le $delftIndent) {
+            $endIdx = $j
+            break
+        }
+    }
+
+    $installUpdated = $false
+    $venvUpdated = $false
+    for ($k = $delftLineIdx + 1; $k -lt $endIdx; $k++) {
+        if ($lines[$k] -match '^\s*install:\s*') {
+            $prefix = ($lines[$k] -replace '^(\\s*install:\\s*).*$','$1')
+            $lines[$k] = "$prefix`"$delftAbsolute`""
+            $installUpdated = $true
+        }
+        if ($lines[$k] -match '^\s*pythonVirtualEnv:\s*') {
+            $prefix = ($lines[$k] -replace '^(\\s*pythonVirtualEnv:\\s*).*$','$1')
+            $lines[$k] = "$prefix`"$venvAbsolute`""
+            $venvUpdated = $true
+        }
+    }
+
+    if (-not $installUpdated) {
+        # Insert install line right after delft:
+        $insertAt = $delftLineIdx + 1
+        $lines = $lines[0..($insertAt-1)] + (" " * ($delftIndent + 2) + "install: `"$delftAbsolute`"") + $lines[$insertAt..($lines.Count-1)]
+    }
+
+    if (-not $venvUpdated) {
+        # Insert pythonVirtualEnv line right after install (or after delft: if install was missing)
+        $newLines = New-Object System.Collections.Generic.List[string]
+        $inserted = $false
+        for ($m = 0; $m -lt $lines.Count; $m++) {
+            $newLines.Add($lines[$m])
+            if (-not $inserted -and $m -ge $delftLineIdx -and $lines[$m] -match '^\s*install:\s*') {
+                $newLines.Add((" " * ($delftIndent + 2) + "pythonVirtualEnv: `"$venvAbsolute`""))
+                $inserted = $true
+            }
+        }
+        if (-not $inserted) {
+            $newLines.Insert($delftLineIdx + 1, (" " * ($delftIndent + 2) + "pythonVirtualEnv: `"$venvAbsolute`""))
+        }
+        $lines = $newLines.ToArray()
+    }
+
+    $lines | Set-Content $ConfigPath
     
     Write-Success "Configuration updated"
     Write-Info "DeLFT path: $delftAbsolute"
@@ -451,6 +525,11 @@ if (-not $pythonCommand -and -not $SkipPythonInstall) {
     Write-Host "Python $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION is required but not found." -ForegroundColor Yellow
     Write-Host ""
     
+    if ($NonInteractive) {
+        Write-Error2 "Python not found and NonInteractive was set. Install Python $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION and re-run."
+        exit 1
+    }
+
     $response = Read-Host "Would you like to install Python $PythonVersion? (Y/n)"
     
     if ($response -eq "" -or $response -eq "Y" -or $response -eq "y") {
@@ -517,7 +596,7 @@ if (-not $packagesInstalled) {
 }
 
 # ============================================================================
-# Step 4: Clone DeLFT Repository
+# Step 4: Clone DeLFT Repository + install it into the venv
 # ============================================================================
 
 Write-Header "Step 4: DeLFT Repository"
@@ -526,6 +605,12 @@ $delftPath = Get-OrCloneDeLFT -DelftPath $DELFT_PATH
 
 if (-not $delftPath) {
     Write-Error2 "Failed to set up DeLFT repository. Aborting."
+    exit 1
+}
+
+$delftInstalled = Install-DeLFTFromRepo -VenvPath $VENV_PATH -DelftRepoPath $delftPath
+if (-not $delftInstalled) {
+    Write-Error2 "Failed to install DeLFT from the cloned repository. Aborting."
     exit 1
 }
 

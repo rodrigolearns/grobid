@@ -22,7 +22,7 @@ if not exist "grobid-home\config\grobid.yaml" (
 )
 
 REM Run the PowerShell script
-powershell -ExecutionPolicy Bypass -File "%~dp0setup_delft_windows.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_delft_windows.ps1" %*
 
 if %ERRORLEVEL% neq 0 (
     echo.
