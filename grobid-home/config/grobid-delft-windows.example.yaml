@@ -1,0 +1,278 @@
+# DeLFT-enabled configuration for native Windows validation (TEMPLATE).
+#
+# Purpose:
+# - Keep `grobid-home/config/grobid.yaml` suitable for core (non-ML) out-of-the-box usage.
+# - Provide a reproducible config to run GROBID with DeLFT enabled without editing files back and forth.
+#
+# Usage (from grobid/):
+#   .\gradlew.bat runDelftWindows
+#
+# Note:
+# - This file is an example only (no machine-specific absolute paths).
+# - Copy it to grobid-delft-windows.yaml (or run setup_delft_windows.ps1, which generates it).
+
+grobid:
+  grobidHome: "grobid-home"
+  temp: "tmp"
+  nativelibrary: "lib"
+
+  pdf:
+    pdfalto:
+      path: "pdfalto"
+      memoryLimitMb: 6096
+      timeoutSec: 120
+    blocksMax: 200000
+    tokensMax: 1000000
+
+  consolidation:
+    service: "crossref"
+    glutton:
+      url: "http://localhost:8080"
+    crossref:
+      mailto:
+      token:
+
+  proxy:
+    host:
+    port:
+
+  corsAllowedOrigins: "*"
+  corsAllowedMethods: "OPTIONS,GET,PUT,POST,DELETE,HEAD"
+  corsAllowedHeaders: "X-Requested-With,Content-Type,Accept,Origin"
+
+  languageDetectorFactory: "org.grobid.core.lang.impl.CybozuLanguageDetectorFactory"
+  sentenceDetectorFactory: "org.grobid.core.lang.impl.OpenNLPSentenceDetectorFactory"
+
+  concurrency: 10
+  poolMaxWait: 1
+
+  delft:
+    install: 'C:/PATH/TO/DELFT'
+    pythonVirtualEnv: 'C:/PATH/TO/GROBID/grobid-home/.venv'
+    # DeLFT default is 100 GiB (see DeLFT Embeddings.py). This keeps the validation aligned with that default.
+    lmdbMapSizeGb: 100
+
+  wapiti:
+    nbThreads: 0
+
+  models:
+    - name: "segmentation"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.0000001
+        window: 50
+        nbMaxIterations: 2000
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+        useELMo: false
+        runtime:
+          max_sequence_length: 3000
+          batch_size: 1
+        training:
+          max_sequence_length: 3000
+          batch_size: 10
+
+    - name: "segmentation-article-light"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.0000001
+        window: 50
+        nbMaxIterations: 2000
+
+    - name: "segmentation-article-light-ref"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.0000001
+        window: 50
+        nbMaxIterations: 2000
+
+    - name: "segmentation-sdo-ietf"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.0000001
+        window: 50
+        nbMaxIterations: 2000
+
+    - name: "fulltext"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.0001
+        window: 20
+        nbMaxIterations: 1500
+
+    - name: "header"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.000001
+        window: 30
+        nbMaxIterations: 1500
+      delft:
+        architecture: "BidLSTM_ChainCRF_FEATURES"
+        useELMo: false
+        runtime:
+          max_sequence_length: 3000
+          batch_size: 1
+        training:
+          max_sequence_length: 3000
+          batch_size: 9
+
+    - name: "header-article-light"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.000001
+        window: 30
+        nbMaxIterations: 1500
+      delft:
+        architecture: "BidLSTM_ChainCRF_FEATURES"
+        useELMo: false
+
+    - name: "header-article-light-ref"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.000001
+        window: 30
+        nbMaxIterations: 1500
+      delft:
+        architecture: "BidLSTM_ChainCRF_FEATURES"
+        useELMo: false
+
+    - name: "header-sdo-ietf"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.000001
+        window: 30
+        nbMaxIterations: 1500
+
+    - name: "reference-segmenter"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.00001
+        window: 20
+      delft:
+        architecture: "BidLSTM_ChainCRF_FEATURES"
+        useELMo: false
+        runtime:
+          max_sequence_length: 3000
+          batch_size: 2
+        training:
+          max_sequence_length: 3000
+          batch_size: 10
+
+    - name: "name-header"
+      engine: "wapiti"
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+
+    - name: "name-citation"
+      engine: "wapiti"
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+
+    - name: "date"
+      engine: "wapiti"
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+
+    - name: "figure"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.00001
+        window: 20
+      delft:
+        architecture: "BidLSTM_CRF"
+
+    - name: "table"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.00001
+        window: 20
+      delft:
+        architecture: "BidLSTM_CRF"
+
+    - name: "affiliation-address"
+      engine: "wapiti"
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+
+    # DeLFT-enabled: used to validate JEP + embeddings + LMDB + inference end-to-end.
+    - name: "citation"
+      engine: "delft"
+      wapiti:
+        epsilon: 0.00001
+        window: 50
+        nbMaxIterations: 3000
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+        useELMo: false
+        runtime:
+          max_sequence_length: 500
+          batch_size: 30
+        training:
+          max_sequence_length: 500
+          batch_size: 50
+
+    - name: "patent-citation"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.0001
+        window: 20
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+        runtime:
+          max_sequence_length: 800
+          batch_size: 20
+        training:
+          max_sequence_length: 1000
+          batch_size: 40
+
+    - name: "funding-acknowledgement"
+      engine: "wapiti"
+      wapiti:
+        epsilon: 0.00001
+        window: 50
+        nbMaxIterations: 2000
+      delft:
+        architecture: "BidLSTM_CRF_FEATURES"
+        useELMo: false
+        runtime:
+          max_sequence_length: 800
+          batch_size: 20
+        training:
+          max_sequence_length: 500
+          batch_size: 40
+
+    - name: "copyright"
+      engine: "wapiti"
+      delft:
+        architecture: "gru"
+
+    - name: "license"
+      engine: "wapiti"
+      delft:
+        architecture: "gru"
+
+  modelPreload: true
+
+server:
+    type: custom
+    applicationConnectors:
+    - type: http
+      port: 8070
+    adminConnectors:
+    - type: http
+      port: 8071
+    registerDefaultExceptionMappers: false
+    requestLog:
+      appenders: []
+
+logging:
+  level: INFO
+  loggers:
+    org.apache.pdfbox.pdmodel.font.PDSimpleFont: "OFF"
+    org.glassfish.jersey.internal: "OFF"
+    com.squarespace.jersey2.guice.JerseyGuiceUtils: "OFF"
+  appenders:
+    - type: console
+      threshold: INFO
+      timeZone: UTC
+

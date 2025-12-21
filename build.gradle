@@ -404,7 +404,17 @@ project(":grobid-service") {
         }
         systemProperty "java.library.path", "${javaLibraryPath}"
 
-        def delftConfig = new File(rootProject.rootDir, "grobid-home/config/grobid-delft-windows.yaml").absolutePath
+        def delftConfigFile = new File(rootProject.rootDir, "grobid-home/config/grobid-delft-windows.yaml")
+        def delftConfigExampleFile = new File(rootProject.rootDir, "grobid-home/config/grobid-delft-windows.example.yaml")
+        doFirst {
+            if (!delftConfigFile.exists()) {
+                throw new GradleException(
+                    "Missing DeLFT Windows config: " + delftConfigFile.absolutePath + System.lineSeparator() +
+                    "Generate it via grobid-home/scripts/setup_delft_windows.ps1, or copy/edit: " + delftConfigExampleFile.absolutePath
+                )
+            }
+        }
+        def delftConfig = delftConfigFile.absolutePath
         systemProperty "org.grobid.config", delftConfig
         args "server", delftConfig
     }

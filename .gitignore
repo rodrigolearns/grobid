@@ -102,3 +102,6 @@ citation*.xml
 # JEP native binaries are installed via pip into the Python environment (do not vendor into repo)
 grobid-home/lib/win-64/jep*.dll
 grobid-home/lib/win-32/jep*.dll
+
+# DeLFT-enabled Windows config is generated locally (do not commit machine-specific paths)
+grobid-home/config/grobid-delft-windows.yaml

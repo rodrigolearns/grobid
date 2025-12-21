@@ -45,7 +45,7 @@ Based on an analysis of the baseline repository ([`Research-Signals/grobid`](htt
 #### 6) PDF parsing: pdfalto path/layout on Windows
 
 - **Broken behavior**: pdfalto 0.4 on Windows is under `grobid-home/pdfalto/win-64/pdfalto/` and depends on adjacent DLLs; if the path/layout is not resolved correctly, PDF parsing (and therefore most REST endpoints) fails.
-- **Fix**: resolve the correct Windows pdfalto binary path and align the bundled Windows pdfalto binaries (`pdfalto.exe`, `pdfalto_server.exe`, `cygwin1.dll`) with the expected layout.
+- **Fix**: resolve the correct Windows pdfalto binary path (without changing upstream-shipped binaries). A Windows-only verification script (`grobid-home/scripts/verify_pdfalto_windows.ps1`) is provided to validate the shipped binaries via SHA256.
 
 #### 7) DeLFT embeddings/LMDB cache sizing vs. disk constraints
 
@@ -135,13 +135,15 @@ This script:
 
 By default, core usage does not require DeLFT.
 
-To run GROBID with DeLFT enabled without editing files back and forth, this repository includes a DeLFT-enabled config file and a dedicated Gradle run task.
+To run GROBID with DeLFT enabled without editing files back and forth, this repository includes a DeLFT-enabled config template and a dedicated Gradle run task.
 
 ```powershell
 .\gradlew.bat runDelftWindows
 ```
 
-This uses `grobid-home/config/grobid-delft-windows.yaml`, which enables DeLFT for the `citation` model (and keeps other models on Wapiti), and contains the DeLFT install/venv paths used during validation.
+This uses a locally-generated `grobid-home/config/grobid-delft-windows.yaml` (created by `setup_delft_windows.ps1` from the committed template `grobid-home/config/grobid-delft-windows.example.yaml`). The generated file enables DeLFT for the `citation` model (and keeps other models on Wapiti) and contains machine-specific absolute paths.
+
+Note: if you are not using the setup script, you must create `grobid-home/config/grobid-delft-windows.yaml` yourself (e.g., copy `grobid-delft-windows.example.yaml`) and set `grobid.delft.install` and `grobid.delft.pythonVirtualEnv` to real paths on your machine.
 
 ### DeLFT embeddings + LMDB sizing (facts + guidance)
 
@@ -179,9 +181,6 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 | `grobid-core/src/main/java/org/grobid/core/jni/PythonEnvironmentConfig.java` | Windows venv discovery (`Lib\\site-packages`, `pyvenv.cfg`) |
 | `grobid-core/src/main/java/org/grobid/core/process/ProcessRunner.java` | Replaces Unix-only process handling with `ProcessHandle` |
 | `grobid-core/src/main/java/org/grobid/core/document/DocumentSource.java` | Windows pdfalto path handling (pdfalto 0.4 layout) |
-| `grobid-home/pdfalto/win-64/pdfalto/pdfalto.exe` | Updated Windows pdfalto binary (required by the Windows layout assumptions) |
-| `grobid-home/pdfalto/win-64/pdfalto/pdfalto_server.exe` | Updated Windows pdfalto server binary (required by the Windows layout assumptions) |
-| `grobid-home/pdfalto/win-64/pdfalto/cygwin1.dll` | Updated dependency DLL shipped alongside Windows pdfalto |
 
 ### DeLFT/JEP robustness on Windows
 
@@ -195,7 +194,9 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 | `grobid-home/config/grobid.yaml` | Sets `delft.install`, `pythonVirtualEnv`, and conservative `lmdbMapSizeGb` |
 | `grobid-home/scripts/install_jep_lib.ps1` | Installs JEP into the Python environment on Windows (PowerShell) |
 | `grobid-home/scripts/install_jep_lib.bat` | Batch wrapper for `install_jep_lib.ps1` |
-| `grobid-home/config/grobid-delft-windows.yaml` | Dedicated Windows DeLFT config (enables DeLFT for `citation` without editing default config) |
+| `grobid-home/config/grobid-delft-windows.example.yaml` | DeLFT-enabled Windows config template (no machine-specific paths) |
+| `grobid-home/scripts/verify_pdfalto_windows.ps1` | Verifies upstream-shipped Windows pdfalto binaries via SHA256 |
+| `grobid-home/scripts/verify_pdfalto_windows.bat` | Batch wrapper for `verify_pdfalto_windows.ps1` |
 
 ### Windows setup scripts
 
@@ -203,13 +204,6 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 |------|---------|
 | `grobid-home/scripts/setup_delft_windows.ps1` | One-step DeLFT setup (venv + deps + clone + config + validation) |
 | `grobid-home/scripts/setup_delft_windows.bat` | Batch wrapper for PowerShell setup |
-
-### Repo hygiene / documentation
-
-| File | Purpose |
-|------|---------|
-| `.gitignore` | Prevents committing local Windows validation artifacts (logs, response XMLs) and avoids vendoring JEP DLLs |
-| `WINDOWSME.md` | This document |
 
 ## Known limitations / operational notes
 

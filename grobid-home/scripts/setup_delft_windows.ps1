@@ -484,6 +484,35 @@ function Update-GrobidConfig {
     return $true
 }
 
+function Write-DelftWindowsConfig {
+    param(
+        [string]$DelftPath,
+        [string]$VenvPath
+    )
+
+    Write-Step "Generating grobid-delft-windows.yaml (local, machine-specific paths)..."
+
+    $examplePath = Join-Path $PSScriptRoot "..\\config\\grobid-delft-windows.example.yaml"
+    $outPath = Join-Path $PSScriptRoot "..\\config\\grobid-delft-windows.yaml"
+
+    if (-not (Test-Path $examplePath)) {
+        Write-Error2 "Missing template config: $examplePath"
+        return $false
+    }
+
+    # YAML-safe paths: prefer forward slashes to avoid backslash escape issues in YAML strings and embedded Python.
+    $delftYamlPath = ((Resolve-AgainstGrobidRoot $DelftPath) -replace '\\', '/')
+    $venvYamlPath = ((Resolve-AgainstGrobidRoot $VenvPath) -replace '\\', '/')
+
+    $content = Get-Content $examplePath -Raw
+    $content = $content.Replace("C:/PATH/TO/DELFT", $delftYamlPath)
+    $content = $content.Replace("C:/PATH/TO/GROBID/grobid-home/.venv", $venvYamlPath)
+    $content | Set-Content -Path $outPath -Encoding UTF8
+
+    Write-Success "Generated: $(Resolve-Path $outPath)"
+    return $true
+}
+
 function Test-Installation {
     param([string]$VenvPath)
     
@@ -551,8 +580,9 @@ Prerequisites:
   - Git must be installed
   - For Python auto-install: winget or Chocolatey
 
-After setup, enable DeLFT models in grobid-home\config\grobid.yaml:
-  Change 'engine: "wapiti"' to 'engine: "delft"' for desired models.
+After setup:
+  - Core (non-ML): .\\gradlew.bat run
+  - DeLFT-enabled: .\\gradlew.bat runDelftWindows
 "@
 }
 
@@ -701,6 +731,13 @@ if (-not $configUpdated) {
     Write-Info "Please manually update grobid-home\config\grobid.yaml"
 }
 
+# Generate a DeLFT-enabled Windows config with machine-specific absolute paths.
+# This keeps the default grobid.yaml suitable for core out-of-the-box usage.
+$delftConfigGenerated = Write-DelftWindowsConfig -DelftPath $delftPath -VenvPath $VENV_PATH
+if (-not $delftConfigGenerated) {
+    Write-Info "Could not generate grobid-home\\config\\grobid-delft-windows.yaml (you can copy/edit grobid-delft-windows.example.yaml)"
+}
+
 # ============================================================================
 # Step 6: Validate Installation
 # ============================================================================
@@ -725,16 +762,11 @@ DeLFT Repository:    $delftPath
 
 NEXT STEPS:
 
-1. Enable DeLFT models in grobid-home\config\grobid.yaml:
-   Change 'engine: "wapiti"' to 'engine: "delft"' for desired models.
-   
-   Recommended models to enable:
-   - citation (significantly better accuracy)
-   - header
-   - reference-segmenter
-
-2. Start GROBID:
+1. Start core (non-ML) GROBID:
    .\gradlew.bat run
+
+2. Start GROBID with DeLFT enabled (uses generated grobid-home\config\grobid-delft-windows.yaml):
+   .\gradlew.bat runDelftWindows
 
 3. Test with a PDF:
    curl -v --form input=@./paper.pdf localhost:8070/api/processFulltextDocument
