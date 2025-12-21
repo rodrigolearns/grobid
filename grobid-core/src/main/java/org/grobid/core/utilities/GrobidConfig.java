@@ -66,6 +66,16 @@ public class GrobidConfig {
          */
         public String install;
         public String pythonVirtualEnv;
+
+        /**
+         * LMDB map size (in GiB) used by DeLFT when building the embeddings cache.
+         *
+         * DeLFT defaults to 100 GiB, which can fail on common "100 GB" cloud disks (decimal GB).
+         * This value is used by GROBID to override DeLFT's default map size at runtime.
+         *
+         * If not set, GROBID will use a platform-appropriate default.
+         */
+        public Integer lmdbMapSizeGb;
     }
 
     public static class WapitiParameters {

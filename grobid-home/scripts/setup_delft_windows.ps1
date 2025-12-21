@@ -14,6 +14,10 @@
 .PARAMETER PythonVersion
     Preferred Python version to install if none found (default: 3.10)
 
+.PARAMETER DelftInstallPath
+    Path where the DeLFT repository will be cloned/used (default: ..\delft relative to the GROBID root).
+    Use this when the system drive is low on space (e.g., a GCP data disk mounted as D:\delft).
+
 .PARAMETER SkipPythonInstall
     Skip automatic Python installation prompt
 
@@ -33,6 +37,7 @@
 
 param(
     [string]$PythonVersion = "3.10",
+    [string]$DelftInstallPath = "..\delft",
     [switch]$SkipPythonInstall,
     [switch]$Force,
     [switch]$NonInteractive,
@@ -51,8 +56,22 @@ $MAX_PYTHON_VERSION = [version]"3.12"
 
 # Paths (relative to GROBID root)
 $VENV_PATH = "grobid-home\.venv"
-$DELFT_PATH = "..\delft"
+$DELFT_PATH = $DelftInstallPath
 $CONFIG_PATH = "grobid-home\config\grobid.yaml"
+
+# Resolve the grobid repo root (script lives under grobid-home\scripts\)
+$GROBID_ROOT = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+
+function Resolve-AgainstGrobidRoot {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $Path
+    }
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $GROBID_ROOT $Path))
+}
 
 # ============================================================================
 # Helper Functions
@@ -297,9 +316,10 @@ function Install-Packages {
         }
     }
     Write-Success "JEP installed"
-
+    
     Write-Step "Installing additional dependencies..."
-    & $pip install numpy scikit-learn lxml regex --quiet
+    # DeLFT runtime dependencies (kept relatively loose to prefer wheels and avoid source builds on Windows)
+    & $pip install numpy scikit-learn lxml regex pandas truecase unidecode python-dotenv lmdb blingfire accelerate pydot transformers tensorflow-addons==0.22.0 --quiet
     Write-Success "Additional dependencies installed"
     
     return $true
@@ -384,9 +404,13 @@ function Update-GrobidConfig {
         return $false
     }
     
-    # Get absolute paths
-    $venvAbsolute = [System.IO.Path]::GetFullPath($VenvPath)
-    $delftAbsolute = [System.IO.Path]::GetFullPath($DelftPath)
+    # Get absolute paths (anchored to the grobid repo root to avoid cwd-related mistakes)
+    $venvAbsolute = Resolve-AgainstGrobidRoot $VenvPath
+    $delftAbsolute = Resolve-AgainstGrobidRoot $DelftPath
+
+    # YAML-safe paths: prefer forward slashes to avoid backslash escape issues in double-quoted YAML strings.
+    $venvYamlPath = ($venvAbsolute -replace '\\', '/')
+    $delftYamlPath = ($delftAbsolute -replace '\\', '/')
     
     # Update only within the "grobid -> delft" block to avoid accidental replacements elsewhere.
     $lines = Get-Content $ConfigPath
@@ -417,13 +441,13 @@ function Update-GrobidConfig {
     $venvUpdated = $false
     for ($k = $delftLineIdx + 1; $k -lt $endIdx; $k++) {
         if ($lines[$k] -match '^\s*install:\s*') {
-            $prefix = ($lines[$k] -replace '^(\\s*install:\\s*).*$','$1')
-            $lines[$k] = "$prefix`"$delftAbsolute`""
+            $prefix = ($lines[$k] -replace '^(\s*install:\s*).*$','$1')
+            $lines[$k] = "${prefix}'${delftYamlPath}'"
             $installUpdated = $true
         }
         if ($lines[$k] -match '^\s*pythonVirtualEnv:\s*') {
-            $prefix = ($lines[$k] -replace '^(\\s*pythonVirtualEnv:\\s*).*$','$1')
-            $lines[$k] = "$prefix`"$venvAbsolute`""
+            $prefix = ($lines[$k] -replace '^(\s*pythonVirtualEnv:\s*).*$','$1')
+            $lines[$k] = "${prefix}'${venvYamlPath}'"
             $venvUpdated = $true
         }
     }
@@ -431,7 +455,7 @@ function Update-GrobidConfig {
     if (-not $installUpdated) {
         # Insert install line right after delft:
         $insertAt = $delftLineIdx + 1
-        $lines = $lines[0..($insertAt-1)] + (" " * ($delftIndent + 2) + "install: `"$delftAbsolute`"") + $lines[$insertAt..($lines.Count-1)]
+        $lines = $lines[0..($insertAt-1)] + (" " * ($delftIndent + 2) + "install: '${delftYamlPath}'") + $lines[$insertAt..($lines.Count-1)]
     }
 
     if (-not $venvUpdated) {
@@ -441,12 +465,12 @@ function Update-GrobidConfig {
         for ($m = 0; $m -lt $lines.Count; $m++) {
             $newLines.Add($lines[$m])
             if (-not $inserted -and $m -ge $delftLineIdx -and $lines[$m] -match '^\s*install:\s*') {
-                $newLines.Add((" " * ($delftIndent + 2) + "pythonVirtualEnv: `"$venvAbsolute`""))
+                $newLines.Add((" " * ($delftIndent + 2) + "pythonVirtualEnv: '${venvYamlPath}'"))
                 $inserted = $true
             }
         }
         if (-not $inserted) {
-            $newLines.Insert($delftLineIdx + 1, (" " * ($delftIndent + 2) + "pythonVirtualEnv: `"$venvAbsolute`""))
+            $newLines.Insert($delftLineIdx + 1, (" " * ($delftIndent + 2) + "pythonVirtualEnv: '${venvYamlPath}'"))
         }
         $lines = $newLines.ToArray()
     }
@@ -477,13 +501,15 @@ function Test-Installation {
         return $false
     }
     
-    # Test JEP
-    Write-Info "Testing JEP..."
-    $jepTest = & $python -c "import jep; print(f'JEP {jep.__version__}')" 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success $jepTest
+    # Validate JEP installation.
+    # Note: "import jep" from standalone Python can fail by design because JEP is meant to be embedded in Java.
+    # So we validate by checking that the native DLL is present in site-packages.
+    Write-Info "Checking JEP native library..."
+    $jepDll = Get-ChildItem -Path "$VenvPath\Lib\site-packages\jep" -Filter "jep*.dll" -ErrorAction SilentlyContinue
+    if ($jepDll) {
+        Write-Success "Found: $($jepDll.Name)"
     } else {
-        Write-Error2 "JEP import failed: $jepTest"
+        Write-Error2 "jep.dll not found - JEP native library missing"
         return $false
     }
     
@@ -494,16 +520,6 @@ function Test-Installation {
         Write-Success $delftTest
     } else {
         Write-Error2 "DeLFT import failed: $delftTest"
-        return $false
-    }
-    
-    # Check for jep.dll
-    Write-Info "Checking for jep.dll..."
-    $jepDll = Get-ChildItem -Path "$VenvPath\Lib\site-packages\jep" -Filter "jep*.dll" -ErrorAction SilentlyContinue
-    if ($jepDll) {
-        Write-Success "Found: $($jepDll.Name)"
-    } else {
-        Write-Error2 "jep.dll not found - JEP native library missing"
         return $false
     }
     
@@ -588,7 +604,7 @@ if (-not $pythonCommand -and -not $SkipPythonInstall) {
         Write-Error2 "Python not found and NonInteractive was set. Install Python $MIN_PYTHON_VERSION-$MAX_PYTHON_VERSION and re-run."
         exit 1
     }
-
+    
     $response = Read-Host "Would you like to install Python $PythonVersion? (Y/n)"
     
     if ($response -eq "" -or $response -eq "Y" -or $response -eq "y") {

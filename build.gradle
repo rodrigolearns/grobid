@@ -373,6 +373,26 @@ project(":grobid-service") {
         systemProperty "java.library.path", "${javaLibraryPath}"
     }
 
+    // DeLFT-enabled run target (keeps the default `run` task suitable for core, non-ML usage).
+    // This explicitly sets org.grobid.config so GrobidProperties loads the intended YAML instead of defaulting.
+    tasks.register('runDelftWindows', JavaExec) {
+        group = 'application'
+        description = 'Run grobid-service with the DeLFT-enabled Windows config (grobid-home/config/grobid-delft-windows.yaml).'
+        main = mainClassName
+        classpath = sourceSets.main.runtimeClasspath
+        workingDir = rootProject.rootDir
+
+        def javaLibraryPath = getJavaLibraryPath()
+        if (JavaVersion.current().compareTo(JavaVersion.VERSION_1_8) > 0) {
+            jvmArgs "--add-opens", "java.base/java.lang=ALL-UNNAMED"
+        }
+        systemProperty "java.library.path", "${javaLibraryPath}"
+
+        def delftConfig = new File(rootProject.rootDir, "grobid-home/config/grobid-delft-windows.yaml").absolutePath
+        systemProperty "org.grobid.config", delftConfig
+        args "server", delftConfig
+    }
+
     tasks.distZip.enabled = true
     tasks.distTar.enabled = false
     //tasks.distZip.zip64 = true

@@ -91,3 +91,14 @@ Dockerfile.datastet
 .run
 
 grobid-home/.venv/
+
+# Local Windows validation artifacts (do not commit)
+*.err
+resp*.xml
+resp*.txt
+citation*.txt
+citation*.xml
+
+# JEP native binaries are installed via pip into the Python environment (do not vendor into repo)
+grobid-home/lib/win-64/jep*.dll
+grobid-home/lib/win-32/jep*.dll

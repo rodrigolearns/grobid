@@ -53,6 +53,7 @@ public class DeLFTModel {
             Jep jep = JEPThreadPool.getInstance().getJEPInstance(); 
             try { 
                 String fullModelName = this.modelName.replace("_", "-");
+                final String modelPathForPython = modelPath.getAbsolutePath().replace("\\", "/");
 
                 //if (architecture != null && !architecture.equals("BidLSTM_CRF"))
                 if (architecture != null)
@@ -62,7 +63,7 @@ public class DeLFTModel {
                     fullModelName += "-with_ELMo";
 
                 jep.eval(this.modelName+" = Sequence('" + fullModelName + "')");
-                jep.eval(this.modelName+".load(dir_path='"+modelPath.getAbsolutePath()+"')");
+                jep.eval(this.modelName+".load(dir_path='"+modelPathForPython+"')");
 
                 if (GrobidProperties.getInstance().getDelftRuntimeMaxSequenceLength(this.modelName) != -1) {
                     jep.eval(this.modelName+".model_config.max_sequence_length="+
@@ -106,8 +107,9 @@ public class DeLFTModel {
                 );
                 IOUtilities.writeInFile(tempFile.getAbsolutePath(), value);
                 jep.eval("from pathlib import Path");
+                final String tempFileForPython = tempFile.getAbsolutePath().replace("\\", "/");
                 jep.eval(
-                    name + " = Path('" + tempFile.getAbsolutePath() +
+                    name + " = Path('" + tempFileForPython +
                     "').read_text(encoding='utf-8')"
                 );
                 tempFile.delete();

@@ -84,10 +84,13 @@ public class JEPThreadPoolClassifier {
     }
 
     private void initializeJepInstance(Jep jep, File delftPath) throws JepException {
+        // Windows paths contain backslashes which can be interpreted by Python as escape sequences
+        // (e.g. \U...). Use forward slashes for Python eval strings.
+        final String delftDirForPython = delftPath.getAbsolutePath().replace("\\", "/");
         // import packages
         jep.eval("import os");
         jep.eval("import json");
-        jep.eval("os.chdir('" + delftPath.getAbsolutePath() + "')");
+        jep.eval("os.chdir('" + delftDirForPython + "')");
         jep.eval("from delft.utilities.Embeddings import Embeddings");
         //jep.eval("from delft.utilities.Utilities import split_data_and_labels");
         jep.eval("import delft.textClassification");
@@ -132,9 +135,6 @@ public class JEPThreadPoolClassifier {
                     } catch (JepException e) {
                         LOGGER.error("Failed to close JEP instance", e);
                     }
-                } else {
-                    LOGGER.error("JEP initialisation failed");
-                    throw new RuntimeException("JEP initialisation failed");
                 }
             }
         }

@@ -28,6 +28,7 @@ import java.util.stream.Collectors;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import org.apache.commons.lang3.SystemUtils;
 
 /**
  * This class provide methods to set/load/access grobid config value from a yaml config file loaded
@@ -777,6 +778,23 @@ public class GrobidProperties {
 
     public static void setPythonVirtualEnv(String pythonVirtualEnv) {
         grobidConfig.grobid.delft.pythonVirtualEnv = pythonVirtualEnv;
+    }
+
+    /**
+     * LMDB map size (in GiB) used by DeLFT when building the embeddings cache.
+     *
+     * DeLFT defaults to 100 GiB, which can fail on common "100 GB" (decimal) Windows cloud disks.
+     * We therefore use a smaller default on Windows, unless explicitly overridden in grobid.yaml.
+     */
+    public static int getDelftLmdbMapSizeGb() {
+        if (grobidConfig != null && grobidConfig.grobid != null && grobidConfig.grobid.delft != null
+            && grobidConfig.grobid.delft.lmdbMapSizeGb != null) {
+            return grobidConfig.grobid.delft.lmdbMapSizeGb;
+        }
+        // Conservative, practical defaults:
+        // - Windows: keep below typical small/medium data disks and avoid immediate LMDB preallocation failures.
+        // - Other OS: keep DeLFT's historical default behavior.
+        return SystemUtils.IS_OS_WINDOWS ? 32 : 100;
     }
 
     public static int getWindow(final GrobidModel model) {
