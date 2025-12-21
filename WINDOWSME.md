@@ -19,8 +19,8 @@ Based on an analysis of the baseline repository ([`Research-Signals/grobid`](htt
 
 #### 1) Gradle build + runtime `java.library.path` on Windows
 
-- **Broken behavior**: `grobid/build.gradle` treated non-Mac/non-Unix as unsupported and assembled runtime library paths using Unix assumptions, which prevents reliable native library loading at startup on Windows.
-- **Fix**: add a Windows branch and build library paths using `File.pathSeparator`, pointing at `grobid-home/lib/win-*`.
+- **Broken behavior**: `build.gradle` treated non-Mac/non-Unix as unsupported and assembled runtime library paths using Unix assumptions, which prevents reliable native library loading at startup on Windows.
+- **Fix**: add a Windows branch and build library paths using `File.pathSeparator`, pointing at `grobid-home/lib/win-*`. The env-based augmentation (`VIRTUAL_ENV`/`CONDA_PREFIX`) is now Windows-aware (`Lib\\site-packages`) and defensive (won’t throw if the env layout doesn’t match expectations).
 
 #### 2) Native CRF libraries and Windows packaging expectations
 
@@ -45,7 +45,7 @@ Based on an analysis of the baseline repository ([`Research-Signals/grobid`](htt
 #### 6) PDF parsing: pdfalto path/layout on Windows
 
 - **Broken behavior**: pdfalto 0.4 on Windows is under `grobid-home/pdfalto/win-64/pdfalto/` and depends on adjacent DLLs; if the path/layout is not resolved correctly, PDF parsing (and therefore most REST endpoints) fails.
-- **Fix**: resolve the correct Windows pdfalto binary path.
+- **Fix**: resolve the correct Windows pdfalto binary path and align the bundled Windows pdfalto binaries (`pdfalto.exe`, `pdfalto_server.exe`, `cygwin1.dll`) with the expected layout.
 
 #### 7) DeLFT embeddings/LMDB cache sizing vs. disk constraints
 
@@ -174,11 +174,14 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 
 | File | Why it changed (Windows impact) |
 |------|----------------------------------|
-| `grobid/build.gradle` | Adds Windows platform handling and correct `java.library.path` assembly |
+| `build.gradle` | Adds Windows platform handling and correct `java.library.path` assembly; adds `runDelftWindows` task |
 | `grobid-core/src/main/java/org/grobid/core/main/LibraryLoader.java` | Loads Wapiti + JEP correctly on Windows (JEP from venv) |
 | `grobid-core/src/main/java/org/grobid/core/jni/PythonEnvironmentConfig.java` | Windows venv discovery (`Lib\\site-packages`, `pyvenv.cfg`) |
 | `grobid-core/src/main/java/org/grobid/core/process/ProcessRunner.java` | Replaces Unix-only process handling with `ProcessHandle` |
 | `grobid-core/src/main/java/org/grobid/core/document/DocumentSource.java` | Windows pdfalto path handling (pdfalto 0.4 layout) |
+| `grobid-home/pdfalto/win-64/pdfalto/pdfalto.exe` | Updated Windows pdfalto binary (required by the Windows layout assumptions) |
+| `grobid-home/pdfalto/win-64/pdfalto/pdfalto_server.exe` | Updated Windows pdfalto server binary (required by the Windows layout assumptions) |
+| `grobid-home/pdfalto/win-64/pdfalto/cygwin1.dll` | Updated dependency DLL shipped alongside Windows pdfalto |
 
 ### DeLFT/JEP robustness on Windows
 
@@ -187,10 +190,12 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 | `grobid-core/src/main/java/org/grobid/core/jni/JEPThreadPool.java` | Sanitizes Windows paths before `jep.eval(...)`; passes LMDB sizing config |
 | `grobid-core/src/main/java/org/grobid/core/jni/JEPThreadPoolClassifier.java` | Same path sanitization for classifier pool |
 | `grobid-core/src/main/java/org/grobid/core/jni/DeLFTModel.java` | Sanitizes Windows paths used in model initialization |
-| `grobid-core/src/main/java/org/grobid/core/jni/DeLFTClassifierModel.java` | Same for classifier model initialization |
 | `grobid-core/src/main/java/org/grobid/core/utilities/GrobidConfig.java` | Adds `grobid.delft.lmdbMapSizeGb` configuration binding |
 | `grobid-core/src/main/java/org/grobid/core/utilities/GrobidProperties.java` | Exposes `getDelftLmdbMapSizeGb()` for runtime |
 | `grobid-home/config/grobid.yaml` | Sets `delft.install`, `pythonVirtualEnv`, and conservative `lmdbMapSizeGb` |
+| `grobid-home/scripts/install_jep_lib.ps1` | Installs JEP into the Python environment on Windows (PowerShell) |
+| `grobid-home/scripts/install_jep_lib.bat` | Batch wrapper for `install_jep_lib.ps1` |
+| `grobid-home/config/grobid-delft-windows.yaml` | Dedicated Windows DeLFT config (enables DeLFT for `citation` without editing default config) |
 
 ### Windows setup scripts
 
@@ -198,6 +203,13 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 |------|---------|
 | `grobid-home/scripts/setup_delft_windows.ps1` | One-step DeLFT setup (venv + deps + clone + config + validation) |
 | `grobid-home/scripts/setup_delft_windows.bat` | Batch wrapper for PowerShell setup |
+
+### Repo hygiene / documentation
+
+| File | Purpose |
+|------|---------|
+| `.gitignore` | Prevents committing local Windows validation artifacts (logs, response XMLs) and avoids vendoring JEP DLLs |
+| `WINDOWSME.md` | This document |
 
 ## Known limitations / operational notes
 

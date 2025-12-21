@@ -55,11 +55,27 @@ def getJavaLibraryPath = {
     }
 
     if (envPrefix) {
-        def envLibs = "${envPrefix}/lib"
-        def pythonDirectory = file(envLibs).listFiles({ it.toString().contains("/lib/python") } as FileFilter)?.first()
-        def pythonVersion = (pythonDirectory =~ /python([0-9]\.[0-9]+)/)[0][1]
-
-        javaLibraryPath += "${pathSeparator}${envLibs}${pathSeparator}${envLibs}/python${pythonVersion}/site-packages/jep"
+        // Add python/JEP native libs from activated env (if present).
+        // Be defensive: Windows uses "Lib" (capital L) and doesn't have lib/pythonX.Y/ layout.
+        if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+            def envLibs = file("${envPrefix}/Lib")
+            def envSitePackagesJep = file("${envPrefix}/Lib/site-packages/jep")
+            if (envLibs.exists()) {
+                javaLibraryPath += "${pathSeparator}${envLibs.absolutePath}"
+            }
+            if (envSitePackagesJep.exists()) {
+                javaLibraryPath += "${pathSeparator}${envSitePackagesJep.absolutePath}"
+            }
+        } else {
+            def envLibs = "${envPrefix}/lib"
+            def pythonDirectory = file(envLibs).listFiles({ it.toString().contains("/lib/python") } as FileFilter)?.first()
+            if (pythonDirectory != null) {
+                def pythonVersion = (pythonDirectory =~ /python([0-9]\.[0-9]+)/)[0][1]
+                javaLibraryPath += "${pathSeparator}${envLibs}${pathSeparator}${envLibs}/python${pythonVersion}/site-packages/jep"
+            } else {
+                // Nothing to add (env layout didn't match expected pattern)
+            }
+        }
     }
     return javaLibraryPath
 }
