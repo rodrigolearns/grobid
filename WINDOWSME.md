@@ -44,8 +44,8 @@ Based on an analysis of the baseline repository ([`Research-Signals/grobid`](htt
 
 #### 6) PDF parsing: pdfalto path/layout on Windows
 
-- **Broken behavior**: pdfalto 0.4 on Windows is under `grobid-home/pdfalto/win-64/pdfalto/` and depends on adjacent DLLs; if the path/layout is not resolved correctly, PDF parsing (and therefore most REST endpoints) fails.
-- **Fix**: resolve the correct Windows pdfalto binary path (without changing upstream-shipped binaries). A Windows-only verification script (`grobid-home/scripts/verify_pdfalto_windows.ps1`) is provided to validate the shipped binaries via SHA256.
+- **Broken behavior**: a clean clone contains an outdated Windows `pdfalto` (`pdfalto version 0.1`), which causes PDF → XML conversion failures (core endpoints return errors despite the service being up).
+- **Fix**: keep Windows-specific path handling for the pdfalto 0.4 layout and add a Windows bootstrap step so `.\gradlew.bat run` installs **official pdfalto 0.4** (download + SHA256 verification) automatically. The verification logic is also available as `grobid-home/scripts/verify_pdfalto_windows.ps1`.
 
 #### 7) DeLFT embeddings/LMDB cache sizing vs. disk constraints
 
@@ -74,6 +74,8 @@ Based on an analysis of the baseline repository ([`Research-Signals/grobid`](htt
 ```powershell
 .\gradlew.bat run
 ```
+
+On Windows, the first run bootstraps **official `pdfalto` 0.4** (download + SHA256 verification), which is required for PDF parsing.
 
 3) Verify health:
 
@@ -176,7 +178,7 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 
 | File | Why it changed (Windows impact) |
 |------|----------------------------------|
-| `build.gradle` | Adds Windows platform handling and correct `java.library.path` assembly; adds `runDelftWindows` task |
+| `build.gradle` | Adds Windows platform handling and correct `java.library.path` assembly; adds `runDelftWindows` task; makes Windows runs bootstrap `pdfalto` automatically |
 | `grobid-core/src/main/java/org/grobid/core/main/LibraryLoader.java` | Loads Wapiti + JEP correctly on Windows (JEP from venv) |
 | `grobid-core/src/main/java/org/grobid/core/jni/PythonEnvironmentConfig.java` | Windows venv discovery (`Lib\\site-packages`, `pyvenv.cfg`) |
 | `grobid-core/src/main/java/org/grobid/core/process/ProcessRunner.java` | Replaces Unix-only process handling with `ProcessHandle` |
@@ -195,7 +197,9 @@ The changes are intentionally scoped to Windows-specific branches/paths to prese
 | `grobid-home/scripts/install_jep_lib.ps1` | Installs JEP into the Python environment on Windows (PowerShell) |
 | `grobid-home/scripts/install_jep_lib.bat` | Batch wrapper for `install_jep_lib.ps1` |
 | `grobid-home/config/grobid-delft-windows.example.yaml` | DeLFT-enabled Windows config template (no machine-specific paths) |
-| `grobid-home/scripts/verify_pdfalto_windows.ps1` | Verifies upstream-shipped Windows pdfalto binaries via SHA256 |
+| `grobid-home/scripts/install_pdfalto_windows.ps1` | Downloads + installs official `pdfalto` 0.4 on Windows and verifies SHA256 |
+| `grobid-home/scripts/install_pdfalto_windows.bat` | Batch wrapper for `install_pdfalto_windows.ps1` |
+| `grobid-home/scripts/verify_pdfalto_windows.ps1` | Verifies Windows `pdfalto` binaries via SHA256 |
 | `grobid-home/scripts/verify_pdfalto_windows.bat` | Batch wrapper for `verify_pdfalto_windows.ps1` |
 
 ### Windows setup scripts

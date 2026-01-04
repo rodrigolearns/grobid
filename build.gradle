@@ -377,6 +377,16 @@ project(":grobid-service") {
 
     mainClassName = 'org.grobid.service.main.GrobidServiceApplication'
 
+    // Windows bootstrap: ensure a working pdfalto is present (pdfalto 0.4 is required for reliable PDF parsing).
+    // We do not vendor binaries in this repo; instead we download the official release asset and verify SHA256.
+    tasks.register('ensurePdfaltoWindows', Exec) {
+        onlyIf { Os.isFamily(Os.FAMILY_WINDOWS) }
+        workingDir rootProject.rootDir
+        commandLine 'powershell',
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', new File(rootProject.rootDir, 'grobid-home/scripts/install_pdfalto_windows.ps1').absolutePath
+    }
 
     tasks.run {
         def javaLibraryPath = getJavaLibraryPath()
@@ -388,6 +398,9 @@ project(":grobid-service") {
 
         systemProperty "java.library.path", "${javaLibraryPath}"
     }
+
+    // Make `.\gradlew.bat run` self-contained on Windows by ensuring pdfalto is installed first.
+    tasks.run.dependsOn tasks.named('ensurePdfaltoWindows')
 
     // DeLFT-enabled run target (keeps the default `run` task suitable for core, non-ML usage).
     // This explicitly sets org.grobid.config so GrobidProperties loads the intended YAML instead of defaulting.
@@ -418,6 +431,9 @@ project(":grobid-service") {
         systemProperty "org.grobid.config", delftConfig
         args "server", delftConfig
     }
+
+    // Also required for DeLFT runs, since they still process PDFs via pdfalto.
+    tasks.named('runDelftWindows').configure { dependsOn tasks.named('ensurePdfaltoWindows') }
 
     tasks.distZip.enabled = true
     tasks.distTar.enabled = false
@@ -750,3 +766,8 @@ release {
         requireBranch.set('master')
     }
 }
+
+
+
+
+

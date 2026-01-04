@@ -105,3 +105,9 @@ grobid-home/lib/win-32/jep*.dll
 
 # DeLFT-enabled Windows config is generated locally (do not commit machine-specific paths)
 grobid-home/config/grobid-delft-windows.yaml
+
+# Windows pdfalto is bootstrapped locally (do not vendor binaries/DLLs)
+grobid-home/pdfalto/win-64/pdfalto/*
+!grobid-home/pdfalto/win-64/pdfalto/.gitkeep
+grobid-home/pdfalto/win-32/pdfalto/*
+!grobid-home/pdfalto/win-32/pdfalto/.gitkeep
