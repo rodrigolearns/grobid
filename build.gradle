@@ -16,6 +16,10 @@ buildscript {
     }
 }
 
+// NOTE: Avoid importing Gradle/Ant/Kotlin task classes here.
+// Some IDEs flag Gradle scripts with "unable to resolve class ..." even when Gradle runtime is fine.
+// We use os.name/os.arch for platform detection and reflective lookup for KotlinCompile.
+
 repositories {
     mavenLocal()
     mavenCentral()
@@ -27,22 +31,27 @@ repositories {
 def getJavaLibraryPath = {
     def jepLocalLibraries = ""
     def pathSeparator = File.pathSeparator
-    
-    if (Os.isFamily(Os.FAMILY_MAC)) {
-        if (Os.OS_ARCH.equals("aarch64")) {
+    def osName = System.getProperty("os.name").toLowerCase()
+    def osArch = System.getProperty("os.arch")
+    def isWindows = osName.contains("windows")
+    def isMac = osName.contains("mac")
+    def isUnix = !isWindows && !isMac
+
+    if (isMac) {
+        if ("aarch64".equals(osArch)) {
             jepLocalLibraries = "${file("./grobid-home/lib/mac_arm-64").absolutePath}"
         } else {
             jepLocalLibraries = "${file("./grobid-home/lib/mac-64").absolutePath}"
         }
-    } else if (Os.isFamily(Os.FAMILY_UNIX)) {
-        jepLocalLibraries = "${rootProject.rootDir.getAbsolutePath()}/grobid-home/lib/lin-64/jep:" +
+    } else if (isUnix) {
+        jepLocalLibraries = "${rootProject.rootDir.getAbsolutePath()}/grobid-home/lib/lin-64/jep${pathSeparator}" +
             "${rootProject.rootDir.getAbsolutePath()}/grobid-home/lib/lin-64"
-    } else if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+    } else if (isWindows) {
         // Windows support: use win-64 or win-32 based on architecture
         def winArch = System.getProperty("os.arch").contains("64") ? "win-64" : "win-32"
         jepLocalLibraries = "${file("./grobid-home/lib/${winArch}").absolutePath}"
     } else {
-        throw new RuntimeException("Unsupported platform!")
+        throw new RuntimeException("Unsupported platform! os.name=" + System.getProperty("os.name") + " os.arch=" + System.getProperty("os.arch"))
     }
 
     def javaLibraryPath = "${System.getProperty('java.library.path')}${pathSeparator}${jepLocalLibraries}"
@@ -57,7 +66,7 @@ def getJavaLibraryPath = {
     if (envPrefix) {
         // Add python/JEP native libs from activated env (if present).
         // Be defensive: Windows uses "Lib" (capital L) and doesn't have lib/pythonX.Y/ layout.
-        if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+        if (System.getProperty("os.name").toLowerCase().contains("windows")) {
             def envLibs = file("${envPrefix}/Lib")
             def envSitePackagesJep = file("${envPrefix}/Lib/site-packages/jep")
             if (envLibs.exists()) {
@@ -67,10 +76,10 @@ def getJavaLibraryPath = {
                 javaLibraryPath += "${pathSeparator}${envSitePackagesJep.absolutePath}"
             }
         } else {
-            def envLibs = "${envPrefix}/lib"
-            def pythonDirectory = file(envLibs).listFiles({ it.toString().contains("/lib/python") } as FileFilter)?.first()
+        def envLibs = "${envPrefix}/lib"
+        def pythonDirectory = file(envLibs).listFiles({ it.toString().contains("/lib/python") } as FileFilter)?.first()
             if (pythonDirectory != null) {
-                def pythonVersion = (pythonDirectory =~ /python([0-9]\.[0-9]+)/)[0][1]
+        def pythonVersion = (pythonDirectory =~ /python([0-9]\.[0-9]+)/)[0][1]
                 javaLibraryPath += "${pathSeparator}${envLibs}${pathSeparator}${envLibs}/python${pythonVersion}/site-packages/jep"
             } else {
                 // Nothing to add (env layout didn't match expected pattern)
@@ -152,12 +161,18 @@ subprojects {
     sourceCompatibility = 1.11
     targetCompatibility = 1.11
 
-    tasks.withType(KotlinCompile).configureEach {
+    // Configure KotlinCompile tasks (when Kotlin plugin is applied) without a hard class reference.
+    try {
+        def ktCompileClass = Class.forName("org.jetbrains.kotlin.gradle.tasks.KotlinCompile")
+        tasks.withType(ktCompileClass).configureEach {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
         kotlinOptions {
             jvmTarget = JavaVersion.VERSION_11
         }
+        }
+    } catch (Throwable ignored) {
+        // Kotlin plugin/classes not available in this context
     }
 
     repositories {
@@ -367,9 +382,6 @@ project("grobid-home") {
     }
 }
 
-import org.apache.tools.ant.taskdefs.condition.Os
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-
 project(":grobid-service") {
     apply plugin: 'application'
     apply plugin: 'jacoco'
@@ -378,14 +390,26 @@ project(":grobid-service") {
     mainClassName = 'org.grobid.service.main.GrobidServiceApplication'
 
     // Windows bootstrap: ensure a working pdfalto is present (pdfalto 0.4 is required for reliable PDF parsing).
-    // We do not vendor binaries in this repo; instead we download the official release asset and verify SHA256.
-    tasks.register('ensurePdfaltoWindows', Exec) {
-        onlyIf { Os.isFamily(Os.FAMILY_WINDOWS) }
-        workingDir rootProject.rootDir
-        commandLine 'powershell',
-            '-NoProfile',
-            '-ExecutionPolicy', 'Bypass',
-            '-File', new File(rootProject.rootDir, 'grobid-home/scripts/install_pdfalto_windows.ps1').absolutePath
+    // Professional approach: Gradle-native download + unzip + SHA256 verification (no PowerShell dependency).
+    tasks.register('ensurePdfaltoWindows', org.grobid.gradle.EnsurePdfaltoWindowsTask) {
+        onlyIf { System.getProperty("os.name").toLowerCase().contains("windows") }
+        pdfaltoVersionTag = "0.4"
+        overrideUrl = System.getProperty("grobid.pdfalto.windows.url") ?: System.getenv("GROBID_PDFALTO_URL")
+        targetDir = rootProject.file("grobid-home/pdfalto/win-64/pdfalto")
+    }
+
+    // Diagnostics: probes the exact GitHub endpoints involved in bootstrap.
+    tasks.register('diagnoseWindowsBootstrap', org.grobid.gradle.ProbeUrlsTask) {
+        urls = [
+            // Git operations usually hit github.com over HTTPS
+            "https://github.com/rodrigolearns/grobid",
+            // API host is distinct; enterprises sometimes block it separately
+            "https://api.github.com/repos/kermitt2/pdfalto/releases/tags/0.4",
+            // Release download endpoints (often redirect to objects.githubusercontent.com)
+            "https://github.com/kermitt2/pdfalto/releases/tag/0.4",
+            // Expected maintained mirror location (will be 404 until we publish it)
+            "https://github.com/rodrigolearns/grobid/releases/download/pdfalto-win64-0.4/pdfalto-win64-0.4.zip"
+        ]
     }
 
     tasks.run {
@@ -401,39 +425,6 @@ project(":grobid-service") {
 
     // Make `.\gradlew.bat run` self-contained on Windows by ensuring pdfalto is installed first.
     tasks.run.dependsOn tasks.named('ensurePdfaltoWindows')
-
-    // DeLFT-enabled run target (keeps the default `run` task suitable for core, non-ML usage).
-    // This explicitly sets org.grobid.config so GrobidProperties loads the intended YAML instead of defaulting.
-    tasks.register('runDelftWindows', JavaExec) {
-        group = 'application'
-        description = 'Run grobid-service with the DeLFT-enabled Windows config (grobid-home/config/grobid-delft-windows.yaml).'
-        main = mainClassName
-        classpath = sourceSets.main.runtimeClasspath
-        workingDir = rootProject.rootDir
-
-        def javaLibraryPath = getJavaLibraryPath()
-        if (JavaVersion.current().compareTo(JavaVersion.VERSION_1_8) > 0) {
-            jvmArgs "--add-opens", "java.base/java.lang=ALL-UNNAMED"
-        }
-        systemProperty "java.library.path", "${javaLibraryPath}"
-
-        def delftConfigFile = new File(rootProject.rootDir, "grobid-home/config/grobid-delft-windows.yaml")
-        def delftConfigExampleFile = new File(rootProject.rootDir, "grobid-home/config/grobid-delft-windows.example.yaml")
-        doFirst {
-            if (!delftConfigFile.exists()) {
-                throw new GradleException(
-                    "Missing DeLFT Windows config: " + delftConfigFile.absolutePath + System.lineSeparator() +
-                    "Generate it via grobid-home/scripts/setup_delft_windows.ps1, or copy/edit: " + delftConfigExampleFile.absolutePath
-                )
-            }
-        }
-        def delftConfig = delftConfigFile.absolutePath
-        systemProperty "org.grobid.config", delftConfig
-        args "server", delftConfig
-    }
-
-    // Also required for DeLFT runs, since they still process PDFs via pdfalto.
-    tasks.named('runDelftWindows').configure { dependsOn tasks.named('ensurePdfaltoWindows') }
 
     tasks.distZip.enabled = true
     tasks.distTar.enabled = false
@@ -594,23 +585,29 @@ project(":grobid-trainer") {
     ]
 
     def libraries = ""
-    def pathSeparator = File.pathSeparator
-    
-    if (Os.isFamily(Os.FAMILY_MAC)) {
-        if (Os.OS_ARCH.equals("aarch64")) {
+    def osName = System.getProperty("os.name").toLowerCase()
+    def osArch = System.getProperty("os.arch")
+    def isWindows = osName.contains("windows")
+    def isMac = osName.contains("mac")
+    def isUnix = !isWindows && !isMac
+
+    if (isMac) {
+        if ("aarch64".equals(osArch)) {
             libraries = "${file("../grobid-home/lib/mac_arm-64").absolutePath}"
         } else {
             libraries = "${file("../grobid-home/lib/mac-64").absolutePath}"
         }
-    } else if (Os.isFamily(Os.FAMILY_UNIX)) {
-        libraries = "${file("../grobid-home/lib/lin-64/jep").absolutePath}:" +
-            "${file("../grobid-home/lib/lin-64").absolutePath}:"
-    } else if (Os.isFamily(Os.FAMILY_WINDOWS)) {
-        // Windows support: use win-64 or win-32 based on architecture
+    } else if (isUnix) {
+        def pathSeparator = File.pathSeparator
+        libraries = "${file("../grobid-home/lib/lin-64/jep").absolutePath}${pathSeparator}" +
+            "${file("../grobid-home/lib/lin-64").absolutePath}${pathSeparator}"
+    } else if (isWindows) {
+        def pathSeparator = File.pathSeparator
         def winArch = System.getProperty("os.arch").contains("64") ? "win-64" : "win-32"
+        // For trainer tasks we only need the native lib folder; JEP is loaded from the Python env when using DeLFT.
         libraries = "${file("../grobid-home/lib/${winArch}").absolutePath}${pathSeparator}"
     } else {
-        throw new RuntimeException("Unsupported platform!")
+        throw new RuntimeException("Unsupported platform! os.name=" + System.getProperty("os.name") + " os.arch=" + System.getProperty("os.arch"))
     }
 
     trainerTasks.each { taskName, mainClassName ->
@@ -766,8 +763,3 @@ release {
         requireBranch.set('master')
     }
 }
-
-
-
-
-

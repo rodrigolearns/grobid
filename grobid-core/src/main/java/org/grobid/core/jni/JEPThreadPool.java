@@ -83,17 +83,9 @@ public class JEPThreadPool {
     }
 
     private void initializeJepInstance(Jep jep, File delftPath) throws JepException {
-        // Windows paths contain backslashes which can be interpreted by Python as escape sequences
-        // (e.g. \U...). Use forward slashes for Python eval strings.
-        final String delftDirForPython = delftPath.getAbsolutePath().replace("\\", "/");
         // import packages
         jep.eval("import os");
-        jep.eval("os.chdir('" + delftDirForPython + "')");
-        // Override DeLFT LMDB map_size to avoid failures on common "100 GB" (decimal) Windows disks.
-        // DeLFT's default is 100 GiB which can be slightly larger than a 100 GB disk.
-        final long mapSizeBytes = (long) GrobidProperties.getDelftLmdbMapSizeGb() * 1024L * 1024L * 1024L;
-        jep.eval("import delft.utilities.Embeddings as _grobid_embeddings");
-        jep.eval("_grobid_embeddings.map_size = " + mapSizeBytes);
+        jep.eval("os.chdir('" + delftPath.getAbsolutePath() + "')");
         jep.eval("from delft.utilities.Embeddings import Embeddings");
         jep.eval("import delft.sequenceLabelling");
         jep.eval("from delft.sequenceLabelling import Sequence");
@@ -138,6 +130,9 @@ public class JEPThreadPool {
                     } catch (JepException e) {
                         LOGGER.error("failed to close JEP instance", e);
                     }
+                } else {
+                    LOGGER.error("JEP initialisation failed");
+                    throw new RuntimeException("JEP initialisation failed");
                 }
             }
         }

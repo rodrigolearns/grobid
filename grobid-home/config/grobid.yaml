@@ -67,11 +67,8 @@ grobid:
     # DeLFT global parameters
     # delft installation path if Deep Learning architectures are used to implement one of the sequence labeling model, 
     # embeddings are usually compiled as lmdb under delft/data (this parameter is ignored if only featured-engineered CRF are used)
-    install: 'D:/delft'
-    pythonVirtualEnv: 'C:/Users/rodrigo_rosas3/GOBRID/grobid/grobid-home/.venv'
-    # Override DeLFT's LMDB map size (GiB). For the clean-slate validation test, this is set to 100 (DeLFT's historical default).
-    # This value is in GiB.
-    lmdbMapSizeGb: 100
+    install: "../delft"
+    pythonVirtualEnv:
 
   wapiti:
     # Wapiti global parameters
@@ -267,9 +264,8 @@ grobid:
         architecture: "BidLSTM_CRF_FEATURES"
 
     - name: "citation"
-      # Optional ML (DeLFT): enable by switching this engine from "wapiti" to "delft" after completing DeLFT setup.
-      # Core (out-of-the-box) usage keeps Wapiti as the default.
       engine: "wapiti"
+      #engine: "delft"
       wapiti:
         # wapiti training parameters, they will be used at training time only
         epsilon: 0.00001

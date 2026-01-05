@@ -5,17 +5,9 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-function Write-Info([string]$msg) {
-    Write-Host $msg -ForegroundColor Cyan
-}
-
-function Write-Warn([string]$msg) {
-    Write-Host $msg -ForegroundColor Yellow
-}
-
-function Write-Err([string]$msg) {
-    Write-Host $msg -ForegroundColor Red
-}
+function Write-Info([string]$msg) { Write-Host $msg -ForegroundColor Cyan }
+function Write-Warn([string]$msg) { Write-Host $msg -ForegroundColor Yellow }
+function Write-Err([string]$msg) { Write-Host $msg -ForegroundColor Red }
 
 function Should-KeepFile([System.IO.FileInfo]$File) {
     if ($File.Name -ieq "xpdfrc") { return $true }
@@ -44,9 +36,7 @@ foreach ($arch in $windowsArches) {
 
     $files = Get-ChildItem -LiteralPath $archDir -Recurse -File -ErrorAction SilentlyContinue
     foreach ($f in $files) {
-        if (Should-KeepFile -File $f) {
-            continue
-        }
+        if (Should-KeepFile -File $f) { continue }
 
         if ($DryRun) {
             Write-Host ("WOULD DELETE: {0}" -f $f.FullName)
@@ -94,10 +84,7 @@ if ($failed.Count -gt 0) {
     Write-Host "(none)"
 }
 
-if (($failed.Count -gt 0) -or ($remaining.Count -gt 0)) {
-    exit 1
-}
-
+if (($failed.Count -gt 0) -or ($remaining.Count -gt 0)) { exit 1 }
 exit 0
 
 

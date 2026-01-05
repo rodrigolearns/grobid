@@ -80,8 +80,15 @@ public class DocumentSource {
             //pdfalto executable are separated to avoid dll conflicts
             pdfToXml.append(File.separator +"pdfalto");
         }
-        pdfToXml.append(
-                GrobidProperties.isContextExecutionServer() ? File.separator + "pdfalto_server" : File.separator + "pdfalto");
+        // On Windows, prefer pdfalto.exe for both "server" and "thread" modes.
+        // The historical pdfalto_server.exe is not reliably available for 0.4 (and in this fork it may be stale/0.1),
+        // but pdfalto.exe 0.4 works for conversion and supports the flags we use.
+        if (SystemUtils.IS_OS_WINDOWS) {
+            pdfToXml.append(File.separator).append("pdfalto.exe");
+        } else {
+            pdfToXml.append(
+                    GrobidProperties.isContextExecutionServer() ? File.separator + "pdfalto_server" : File.separator + "pdfalto");
+        }
 
         pdfToXml.append(" -fullFontName -noLineNumbers");
 
@@ -144,8 +151,7 @@ public class DocumentSource {
             cmd.add(pdfPath.getAbsolutePath());
             cmd.add(tmpPathXML.getAbsolutePath());
             if (GrobidProperties.isContextExecutionServer()) {
-                // pdfalto 0.4 on Windows doesn't support --timeout and --ulimit flags
-                // These are only available in the Linux/Mac builds
+                // pdfalto on Windows does not support these flags (and will exit non-zero).
                 if (!SystemUtils.IS_OS_WINDOWS) {
                     cmd.add("--timeout");
                     cmd.add(String.valueOf(GrobidProperties.getPdfaltoTimeoutS()));
@@ -408,6 +414,9 @@ public class DocumentSource {
     }
 
 }
+
+
+
 
 
 

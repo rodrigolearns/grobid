@@ -1,229 +1,204 @@
-# GROBID Native Windows Support
+## GROBID Native Windows Support (Research Signals fork)
 
-This document tracks work to restore **native Windows support** for GROBID, responding to the README’s call for help:
+This document tracks work to restore **native Windows support** for GROBID in the Research Signals “GOBRID” fork.
+
+Upstream GROBID explicitly calls out Windows as an area needing help:
 
 > "GROBID should run properly 'out of the box' on Linux (64 bits) and macOS (Intel and ARM). **We cannot ensure currently support for Windows as we did before (help welcome!)**"
 
-## Overview
+### Overview
 
-This repository includes a set of changes intended to make GROBID run **natively on Windows**, while preserving Linux/macOS behavior.
+This fork aims to make GROBID run **natively on Windows**, while preserving Linux/macOS behavior.
 
-- **Out-of-the-box scope (Windows, core)**: a Windows user can clone the repo, run the service, and use core endpoints (health + PDF processing) without hand-editing code or applying local patches.
-- **Optional ML scope (DeLFT)**: Deep Learning support is documented separately as an **optional add-on**.
+- **Out-of-the-box scope (Windows, core)**: a Windows user can clone the repo, run the service, and use core endpoints (health + PDF processing) without hand-editing files or applying local patches.
+- **Optional ML scope (DeLFT)**: **available, but not part of the one-command core quickstart**. DeLFT on Windows requires an explicit setup step (Python/JEP/TensorFlow + config), and the repo includes scripts/templates to support that workflow.
 
-Upstream GROBID documentation recommends Docker for Windows production deployments. This work provides a native Windows option aimed at development/debugging and Windows-based contribution workflows, while keeping Linux/macOS behavior unchanged.
+Upstream often recommends Docker on Windows for production. This work provides a native Windows option aimed at Research Signals development/debugging and contribution workflows.
 
-## What was broken on Windows (and what was changed)
+### Success criteria (“one-command quickstart”)
 
-Based on an analysis of the baseline repository ([`Research-Signals/grobid`](https://github.com/Research-Signals/grobid.git)), the following Windows-specific breakpoints were identified. For each item, the corresponding change applied in this repository is summarized (with changes kept Windows-guarded to avoid affecting Linux/macOS behavior).
+- A Windows user can clone this repo and run `.\gradlew.bat run`
+- The service starts successfully, and core PDF endpoints produce real TEI output
+- No “mystery manual steps” like “install X”, “run this PowerShell script first”, or “download binaries manually”
+
+## What was broken on Windows (and what we changed)
+
+The main Windows breakpoints we’re addressing are:
 
 #### 1) Gradle build + runtime `java.library.path` on Windows
 
-- **Broken behavior**: `build.gradle` treated non-Mac/non-Unix as unsupported and assembled runtime library paths using Unix assumptions, which prevents reliable native library loading at startup on Windows.
-- **Fix**: add a Windows branch and build library paths using `File.pathSeparator`, pointing at `grobid-home/lib/win-*`. The env-based augmentation (`VIRTUAL_ENV`/`CONDA_PREFIX`) is now Windows-aware (`Lib\\site-packages`) and defensive (won’t throw if the env layout doesn’t match expectations).
+- **Broken behavior**: OS/platform detection and library path building assumed Unix/Mac conventions.
+- **Fix**: Windows-aware branches in `grobid/build.gradle`, using `File.pathSeparator` and `grobid-home/lib/win-*`, plus defensive `CONDA_PREFIX` / `VIRTUAL_ENV` handling (`Lib\...`).
 
-#### 2) Native CRF libraries and Windows packaging expectations
+#### 2) PDF parsing: the `pdfalto` dependency
 
-- **Broken behavior**: Windows native library layout differs (`win-64`, `win-32`) and DeLFT requires JEP, which is not shipped with GROBID and must match the user’s Python version; without correct loading, CRF/DeLFT execution fails.
-- **Fix**: keep Wapiti as a native DLL under `grobid-home/lib/win-64` and load JEP from the Python environment rather than bundling it.
+GROBID relies on a native PDF → XML converter called **`pdfalto`**. On Windows it’s often missing or outdated (e.g., `0.1`), causing PDF processing failures even though the service starts.
 
-#### 3) DeLFT/JEP integration: Windows virtualenv discovery and JEP loading
+Complication: upstream `kermitt2/pdfalto` does **not reliably publish** a Windows binary asset for the exact version we need (0.4), and many enterprise networks block `api.github.com` or GitHub download redirects. That’s why “just download it at runtime” can be flaky.
 
-- **Broken behavior**: Windows venv layout (`Lib\\site-packages`) differs and JEP discovery/loading was not Windows-aware; as a result, DeLFT fails to initialize because `jep.dll` cannot be located/loaded reliably.
-- **Fix**: Windows-aware `PythonEnvironmentConfig` plus Windows-specific JEP loading in `LibraryLoader`.
+#### 3) `pdfalto` flags not supported on Windows
 
-#### 4) Embedded Python evaluation + Windows path escaping (`\U...`)
+- **Broken behavior**: server-mode added Unix-only flags (`--timeout`, `--ulimit`) that Windows `pdfalto` builds don’t support.
+- **Fix**: guard these flags on Windows (`grobid-core`).
 
-- **Broken behavior**: Windows paths passed into `jep.eval("...")` can trigger Python unicode-escape parsing errors (e.g., `\U` sequences), causing DeLFT initialization to fail despite correct installation.
-- **Fix**: sanitize Windows paths to forward slashes (`/`) before using them in embedded Python evaluation.
+#### 5) `pdfalto_server` is not reliable on Windows for `0.4`
 
-#### 5) Process management assumed Unix
+- **Problem**: GROBID’s “server-mode” historically calls `pdfalto_server` as a separate executable. In practice, for Windows bundles targeting `pdfalto 0.4`, a working `pdfalto_server.exe` is not reliably available (and older builds can accidentally ship a stale `0.1` binary).
+- **Fix**: on Windows we always invoke **`pdfalto.exe`** (0.4) even when GROBID is running in “server mode”. This keeps the fast-path process management (`ProcessPdfToXml`) while ensuring we use the correct version.
 
-- **Broken behavior**: Unix-specific process cleanup (`pkill`, `UNIXProcess`) is unavailable on Windows, which can leave orphan processes and destabilize long-running services.
-- **Fix**: use Java 9+ `ProcessHandle` APIs for cross-platform process control.
+#### 4) Process management assumed Unix
 
-#### 6) PDF parsing: pdfalto path/layout on Windows
+- **Broken behavior**: `ProcessRunner.killProcess()` still uses `pkill` and Unix PID reflection.
+- **Status**: still a known limitation; should be replaced by a cross-platform `ProcessHandle` approach in a follow-up.
 
-- **Broken behavior**: a clean clone contains an outdated Windows `pdfalto` (`pdfalto version 0.1`), which causes PDF → XML conversion failures (core endpoints return errors despite the service being up).
-- **Fix**: keep Windows-specific path handling for the pdfalto 0.4 layout and add a Windows bootstrap step so `.\gradlew.bat run` installs **official pdfalto 0.4** (download + SHA256 verification) automatically. The verification logic is also available as `grobid-home/scripts/verify_pdfalto_windows.ps1`.
+## What we implemented in this fork (current behavior)
 
-#### 7) DeLFT embeddings/LMDB cache sizing vs. disk constraints
+### 1) Gradle-native Windows bootstrap for `pdfalto`
 
-- **Broken behavior**: DeLFT embedding compilation allocates large LMDB files; on small/tightly-sized disks this fails during the first run, preventing DeLFT from reaching inference even when everything else is correctly installed.
-- **Fix**: make LMDB sizing configurable via `grobid.delft.lmdbMapSizeGb` and document storage planning for DeLFT on cloud VMs.
+We added a Gradle task implemented in `buildSrc`:
 
-#### 8) Repeatable Windows setup (no patchwork/manual steps)
+- `:grobid-service:ensurePdfaltoWindows` (`org.grobid.gradle.EnsurePdfaltoWindowsTask`)
+- `:grobid-service:run` depends on it, so `.\gradlew.bat run` is self-contained on Windows.
 
-- **Broken behavior**: a manual dependency/setup process is error-prone on Windows; relying on `pip install delft` alone risks layout/version mismatch, undermining deterministic “out of the box” setup.
-- **Fix**: provide `setup_delft_windows.ps1` to create the venv, install dependencies, clone DeLFT, wire it into the venv, and update `grobid.yaml`.
+**Install source priority order**
 
-## Quickstart (native Windows, non-ML / core)
+1. **Bundled zip in the repo** (offline + deterministic):  
+   `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.zip`
+2. **Enterprise override URL** (for internal mirrors):  
+   - Env: `GROBID_PDFALTO_URL`  
+   - JVM prop: `-Dgrobid.pdfalto.windows.url=...`
+3. **Fallback mirrors / GitHub API** (best-effort; may be blocked)
+
+**Install destination**
+
+- Extracts/copies into: `grobid-home/pdfalto/win-64/pdfalto/`
+- That folder is intended to be **ignored by Git** (local machine install), while the single zip artifact is what we would commit.
+
+**Verification model**
+
+- Preferred: verify SHA256 via `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256` (manifest-driven).
+- If the manifest is missing/empty, bootstrap falls back to a **presence-only** check (this keeps maintainer workflows usable until the manifest is populated).
+
+### 2) Windows-safe `java.library.path`
+
+`grobid/build.gradle` builds `java.library.path` correctly on Windows using `File.pathSeparator`, and uses `grobid-home/lib/win-64` (or `win-32`) for native libs.
+
+It also handles activated `CONDA_PREFIX` / `VIRTUAL_ENV` on Windows using `Lib\...` paths.
+
+### 3) Windows-safe `pdfalto` flags
+
+In `grobid-core` we guard `--timeout` / `--ulimit` flags in server execution mode on Windows because Windows builds of `pdfalto` do not support them and can exit non-zero.
+
+### 4) Known limitation: Unix-only `pkill` in process cleanup
+
+`ProcessRunner.killProcess()` still uses `pkill` (Unix-only). On Windows this generally becomes a no-op because PID detection is Unix-specific, but it’s still not ideal and should be replaced with a Windows-safe approach (`ProcessHandle`) in a follow-up.
+
+## Quickstart (native Windows, core)
 
 ### Prerequisites
 
 - Windows x86_64
-- JDK 17 (on PATH or `JAVA_HOME` set)
-- Git
+- JDK 17
 
-### Steps
+### Run
 
-1) Open PowerShell in the `grobid/` directory of this repo.
-
-2) Start the service:
+From the `grobid/` directory:
 
 ```powershell
 .\gradlew.bat run
 ```
 
-On Windows, the first run bootstraps **official `pdfalto` 0.4** (download + SHA256 verification), which is required for PDF parsing.
-
-3) Verify health:
+### Verify health
 
 ```powershell
 curl.exe -sS http://localhost:8070/api/isalive
 ```
 
-4) Smoke test with a PDF (bundled example):
+### Smoke test (fulltext)
 
 ```powershell
 curl.exe -sS -o resp-fulltext.xml -F "input=@grobid-service\src\test\resources\sample1\sample.pdf;type=application/pdf" http://localhost:8070/api/processFulltextDocument
 ```
 
-
-## Status
-
-Validated on 2025-12-21:
-
-| Area | Status | Notes |
-|------|--------|-------|
-| Build | ✅ | Gradle builds successfully |
-| Service startup | ✅ | Service starts and responds on `:8070` |
-| CRF (Wapiti) | ✅ | Native DLL loads and CRF pipeline runs |
-| PDF processing | ✅ | pdfalto-based parsing works (header/fulltext) |
-| Deep Learning (DeLFT) | ✅ (optional) | JEP + embeddings + model load validated (see “Optional ML” below) |
-
-Validation evidence (core):
-- `GET /api/isalive` returns `200`
-- `POST /api/processFulltextDocument` (multipart PDF upload) returns `200` with TEI XML output
-
-## Tested environment (used for validation)
-
-This is the environment used for end-to-end validation of native Windows support (core).
-
-- **Platform**: Google Cloud (Compute Engine)
-- **OS**: Windows Server (build `10.0.20348`)
-- **Java**: JDK 17 (Adoptium distribution)
-- Optional ML (DeLFT) was validated on the same VM using a dedicated `D:` data disk; see the DeLFT section below.
-
-## Deep Learning (DeLFT) setup
-
-DeLFT support is optional. It adds Python/TensorFlow/JEP dependencies and the first run may download and build large embedding caches.
-
-### Setup steps (one-command install)
-
-From the `grobid/` directory:
+### Strong check: XML parse validity
 
 ```powershell
-.\grobid-home\scripts\setup_delft_windows.ps1 -DelftInstallPath "D:\delft" -NonInteractive
+[xml]$x = Get-Content .\resp-fulltext.xml
+$x.DocumentElement.Name
 ```
 
-This script:
-- creates `grobid-home\.venv`
-- installs TensorFlow + JEP + dependencies
-- clones DeLFT to the provided `-DelftInstallPath`
-- updates `grobid-home/config/grobid.yaml` with absolute, Windows-safe paths for `delft.install` and `delft.pythonVirtualEnv`
+## Current status (important)
 
-### Enabling DeLFT models
+- The **bootstrap wiring is present** (Gradle task + run dependency).
+- The **bundled zip is present**: `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.zip`
+- The **`.sha256` manifest is populated**: `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256`
 
-By default, core usage does not require DeLFT.
+That means: **today**, Windows users can run `.\gradlew.bat run` offline using the committed bundle, and the Gradle bootstrap can verify integrity via the manifest.
 
-To run GROBID with DeLFT enabled without editing files back and forth, this repository includes a DeLFT-enabled config template and a dedicated Gradle run task.
+## Maintainer workflow: build + package the Windows bundle
 
-```powershell
-.\gradlew.bat runDelftWindows
-```
+We maintain scripts under `grobid-home/scripts/` to produce a repo-committable bundle:
 
-This uses a locally-generated `grobid-home/config/grobid-delft-windows.yaml` (created by `setup_delft_windows.ps1` from the committed template `grobid-home/config/grobid-delft-windows.example.yaml`). The generated file enables DeLFT for the `citation` model (and keeps other models on Wapiti) and contains machine-specific absolute paths.
+- `build_pdfalto_win64_msys2.bat`: build pdfalto 0.4 on Windows using MSYS2
+- `package_pdfalto_win64.ps1`: zip `grobid-home/pdfalto/win-64/pdfalto/` → write the `.zip` and `.sha256` manifest
 
-Note: if you are not using the setup script, you must create `grobid-home/config/grobid-delft-windows.yaml` yourself (e.g., copy `grobid-delft-windows.example.yaml`) and set `grobid.delft.install` and `grobid.delft.pythonVirtualEnv` to real paths on your machine.
+Once successfully built, commit **only**:
 
-### DeLFT embeddings + LMDB sizing (facts + guidance)
+- `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.zip`
+- `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256`
 
-Operational facts observed during validation:
-- The DeLFT `citation` model uses **`glove-840B`** embeddings.
-- If embeddings are not present locally, DeLFT downloads ~2GB (`glove.840B.300d.zip`).
-- DeLFT builds an LMDB cache under `D:\delft\data\db\...` and **pre-allocates** the LMDB file size based on `grobid.delft.lmdbMapSizeGb`.
+…and keep the extracted folder ignored:
 
-Clean-slate validation observation (this repo, 2025-12-21):
-- With `grobid.delft.lmdbMapSizeGb: 100`, the LMDB file `D:\delft\data\db\glove-840B\data.mdb` was created at **100.00 GiB**.
-- On a 200GB `D:` disk, this left approximately **~99 GiB free** immediately after LMDB creation.
+- `grobid-home/pdfalto/win-64/pdfalto/`
 
-Guidance (non-prescriptive):
-- Plan storage headroom for the first DeLFT run (download + extraction + LMDB build).
-- Consider using a dedicated data disk for DeLFT artifacts on cloud VMs.
+## Design choices (why we did it this way)
 
-## Next steps
+- **Gradle-native bootstrap**: no reliance on PowerShell availability for end users; easier to keep cross-platform and testable.
+- **Bundled zip option**: makes the “one-command quickstart” robust against blocked networks and upstream asset churn.
+- **Manifest-driven SHA verification**: avoids hardcoding file lists and lets the exact runtime DLL set vary (toolchain differences), while still verifying integrity.
 
-- **Upstreamability**: split changes into focused commits/PRs (build/runtime fixes vs. DeLFT/JEP integration vs. docs).
-- **Windows coverage**: add a minimal Windows CI job (build + `api/isalive`) to prevent regressions.
-- **Optional validation**: if CRF++ is intended to be supported on Windows, add a targeted validation case for `libcrfpp.dll` (current validated CRF path is Wapiti).
+## Windows support file inventory (do not delete without updating this doc)
 
----
+This section is the “source of truth” checklist for Windows enablement in this fork. If you remove/rename any of these, update this list in the same PR.
 
-## Files changed (summary)
+### Core: `pdfalto` (required for real PDF processing)
 
-The changes are intentionally scoped to Windows-specific branches/paths to preserve Linux/macOS behavior.
+- **Gradle bootstrap task**: `grobid/buildSrc/src/main/groovy/org/grobid/gradle/EnsurePdfaltoWindowsTask.groovy`  
+  - **Purpose**: provision `pdfalto 0.4` on Windows during `.\gradlew.bat run` (prefers bundled zip, supports override URL, verifies via `.sha256` manifest).
+- **Bundled artifact (temporary workaround)**: `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.zip`  
+  - **Purpose**: the offline/deterministic “one-command quickstart” input; extracted to `grobid-home/pdfalto/win-64/pdfalto/`.
+- **SHA256 manifest**: `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256`  
+  - **Purpose**: integrity verification for the bundle; format is `SHA256  relative/path`.
+- **Maintainer build script**: `grobid-home/scripts/build_pdfalto_win64_msys2.ps1` / `.bat`  
+  - **Purpose**: build `pdfalto 0.4` on Windows via MSYS2, producing an install-ready runtime folder.
+- **Maintainer packaging script**: `grobid-home/scripts/package_pdfalto_win64.ps1` / `.bat`  
+  - **Purpose**: zip the runtime folder and generate the `.sha256` manifest.
+- **MSYS2 installer helper (maintainers)**: `grobid-home/scripts/install_msys2_win64.ps1` / `.bat`  
+  - **Purpose**: best-effort unattended MSYS2 provisioning (with tarball fallback) for maintainers building `pdfalto`.
+- **Optional local helpers**: `grobid-home/scripts/install_pdfalto_windows.ps1` / `.bat`, `verify_pdfalto_windows.ps1` / `.bat`  
+  - **Purpose**: local/maintainer-friendly install & verification outside Gradle (should not be required for end users if the Gradle bootstrap works).
 
-### Core runtime / compatibility
+### Optional ML: DeLFT / JEP (Windows setup path, not part of core quickstart)
 
-| File | Why it changed (Windows impact) |
-|------|----------------------------------|
-| `build.gradle` | Adds Windows platform handling and correct `java.library.path` assembly; adds `runDelftWindows` task; makes Windows runs bootstrap `pdfalto` automatically |
-| `grobid-core/src/main/java/org/grobid/core/main/LibraryLoader.java` | Loads Wapiti + JEP correctly on Windows (JEP from venv) |
-| `grobid-core/src/main/java/org/grobid/core/jni/PythonEnvironmentConfig.java` | Windows venv discovery (`Lib\\site-packages`, `pyvenv.cfg`) |
-| `grobid-core/src/main/java/org/grobid/core/process/ProcessRunner.java` | Replaces Unix-only process handling with `ProcessHandle` |
-| `grobid-core/src/main/java/org/grobid/core/document/DocumentSource.java` | Windows pdfalto path handling (pdfalto 0.4 layout) |
+- **DeLFT setup (PowerShell)**: `grobid-home/scripts/setup_delft_windows.ps1`  
+  - **Purpose**: create `grobid-home/.venv`, install TensorFlow + JEP, clone/register DeLFT, update `grobid.yaml`, and generate a machine-specific config.
+- **DeLFT setup wrapper (BAT)**: `grobid-home/scripts/setup_delft_windows.bat`  
+  - **Purpose**: convenience wrapper to run the PS1 from `cmd.exe`.
+- **DeLFT config template (example)**: `grobid-home/config/grobid-delft-windows.example.yaml`  
+  - **Purpose**: checked-in template (no machine-specific paths); copied/generated into `grobid-home/config/grobid-delft-windows.yaml`.
+- **DeLFT config (generated, ignored)**: `grobid-home/config/grobid-delft-windows.yaml`  
+  - **Purpose**: local file with absolute paths; intentionally ignored by Git (see `.gitignore`).
+- **JEP helper (PowerShell)**: `grobid-home/scripts/install_jep_lib.ps1`  
+  - **Purpose**: legacy/standalone helper to install JEP + DeLFT deps into an existing Python environment.
+- **JEP helper wrapper (BAT)**: `grobid-home/scripts/install_jep_lib.bat`  
+  - **Purpose**: convenience wrapper to run the PS1 from `cmd.exe`.
 
-### DeLFT/JEP robustness on Windows
+### Repo hygiene (prevents committing machine-specific artifacts)
 
-| File | Why it changed (Windows impact) |
-|------|----------------------------------|
-| `grobid-core/src/main/java/org/grobid/core/jni/JEPThreadPool.java` | Sanitizes Windows paths before `jep.eval(...)`; passes LMDB sizing config |
-| `grobid-core/src/main/java/org/grobid/core/jni/JEPThreadPoolClassifier.java` | Same path sanitization for classifier pool |
-| `grobid-core/src/main/java/org/grobid/core/jni/DeLFTModel.java` | Sanitizes Windows paths used in model initialization |
-| `grobid-core/src/main/java/org/grobid/core/utilities/GrobidConfig.java` | Adds `grobid.delft.lmdbMapSizeGb` configuration binding |
-| `grobid-core/src/main/java/org/grobid/core/utilities/GrobidProperties.java` | Exposes `getDelftLmdbMapSizeGb()` for runtime |
-| `grobid-home/config/grobid.yaml` | Sets `delft.install`, `pythonVirtualEnv`, and conservative `lmdbMapSizeGb` |
-| `grobid-home/scripts/install_jep_lib.ps1` | Installs JEP into the Python environment on Windows (PowerShell) |
-| `grobid-home/scripts/install_jep_lib.bat` | Batch wrapper for `install_jep_lib.ps1` |
-| `grobid-home/config/grobid-delft-windows.example.yaml` | DeLFT-enabled Windows config template (no machine-specific paths) |
-| `grobid-home/scripts/install_pdfalto_windows.ps1` | Downloads + installs official `pdfalto` 0.4 on Windows and verifies SHA256 |
-| `grobid-home/scripts/install_pdfalto_windows.bat` | Batch wrapper for `install_pdfalto_windows.ps1` |
-| `grobid-home/scripts/verify_pdfalto_windows.ps1` | Verifies Windows `pdfalto` binaries via SHA256 |
-| `grobid-home/scripts/verify_pdfalto_windows.bat` | Batch wrapper for `verify_pdfalto_windows.ps1` |
+- **Ignore rules**: `grobid/.gitignore`  
+  - **Purpose**: ignore extracted `pdfalto` runtime folder, `.venv`, generated DeLFT config, and JEP DLLs; explicitly allow committing the single `pdfalto-win64-*.zip` bundle.
 
-### Windows setup scripts
+## Licensing note (important)
 
-| File | Purpose |
-|------|---------|
-| `grobid-home/scripts/setup_delft_windows.ps1` | One-step DeLFT setup (venv + deps + clone + config + validation) |
-| `grobid-home/scripts/setup_delft_windows.bat` | Batch wrapper for PowerShell setup |
-
-## Known limitations / operational notes
-
-- **GPU**: not validated as part of this work; validation was performed on CPU.
-
----
-
-## References
-
-- [GROBID Docker Documentation](https://grobid.readthedocs.io/en/latest/Grobid-docker/)
-- [GROBID Troubleshooting - Windows](https://grobid.readthedocs.io/en/latest/Troubleshooting/)
-- [GROBID FAQ - Windows](https://grobid.readthedocs.io/en/latest/Frequently-asked-questions/)
-- [pdfalto Repository](https://github.com/kermitt2/pdfalto)
-- [GitHub Issues - Windows-specific](https://github.com/kermitt2/grobid/issues?q=is%3Aissue+label%3AWindows-specific)
-- [WSL Known Issues](https://github.com/kermitt2/grobid/issues/954)
-
-
-
-
+`pdfalto` is licensed under **GPL-2.0**. Bundling binaries inside an Apache-2.0 project has implications.
+We keep the Windows bundle as a single, clearly documented artifact and treat it as a pragmatic Windows enablement workaround.

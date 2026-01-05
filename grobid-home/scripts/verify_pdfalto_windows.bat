@@ -1,8 +1,41 @@
 @echo off
 setlocal
 
-set SCRIPT_DIR=%~dp0
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%verify_pdfalto_windows.ps1" %*
+REM Verifies SHA256 checksums for expected pdfalto 0.4 Windows binaries.
+REM Usage (from repo root):
+REM   grobid-home\scripts\verify_pdfalto_windows.bat
 
-endlocal
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_pdfalto_windows.ps1" %*
+exit /b %ERRORLEVEL%
+
+@echo off
+setlocal
+
+REM Verifies SHA256 of the locally installed Windows pdfalto bundle (expected pdfalto 0.4).
+REM Usage:
+REM   grobid-home\scripts\verify_pdfalto_windows.bat
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_pdfalto_windows.ps1" %*
+exit /b %ERRORLEVEL%
+
+
+
+
+REM Verifies SHA256 checksums for expected pdfalto 0.4 Windows binaries.
+REM Usage (from repo root):
+REM   grobid-home\scripts\verify_pdfalto_windows.bat
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_pdfalto_windows.ps1" %*
+exit /b %ERRORLEVEL%
+
+@echo off
+setlocal
+
+REM Verifies SHA256 of the locally installed Windows pdfalto bundle (expected pdfalto 0.4).
+REM Usage:
+REM   grobid-home\scripts\verify_pdfalto_windows.bat
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0verify_pdfalto_windows.ps1" %*
+exit /b %ERRORLEVEL%
+
 
