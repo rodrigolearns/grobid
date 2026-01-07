@@ -51,6 +51,13 @@ public class PythonEnvironmentConfig {
         if (this.virtualEnv == null) {
             return null;
         }
+        // venv/conda layout differs by OS:
+        // - Unix: <venv>/lib/...
+        // - Windows: <venv>/Lib/...
+        Path winLib = Paths.get(this.virtualEnv.toString(), "Lib");
+        if (Files.exists(winLib)) {
+            return winLib;
+        }
         return Paths.get(this.virtualEnv.toString(), "lib");
     }
 
@@ -80,6 +87,41 @@ public class PythonEnvironmentConfig {
         }
         if (StringUtils.isEmpty(virtualEnv)) {
             virtualEnv = activeVirtualEnv;
+        }
+
+        // Windows venv/conda layout: <venv>\Lib\site-packages
+        // This is the standard layout for Python venv on Windows.
+        Path windowsSitePackages = Paths.get(virtualEnv, "Lib", "site-packages");
+        if (Files.exists(windowsSitePackages)) {
+            Path jepPath = Paths.get(windowsSitePackages.toString(), "jep");
+            String pythonVersion = null;
+            // Best-effort: read version from pyvenv.cfg if present.
+            Path pyvenvCfg = Paths.get(virtualEnv, "pyvenv.cfg");
+            if (Files.exists(pyvenvCfg)) {
+                try {
+                    List<String> lines = Files.readAllLines(pyvenvCfg);
+                    for (String line : lines) {
+                        String trimmed = StringUtils.trimToEmpty(line);
+                        if (trimmed.toLowerCase().startsWith("version")) {
+                            String[] parts = trimmed.split("=", 2);
+                            if (parts.length == 2) {
+                                pythonVersion = StringUtils.trimToNull(parts[1]);
+                            }
+                            break;
+                        }
+                    }
+                } catch (IOException e) {
+                    // ignore: version is optional metadata
+                }
+            }
+
+            return new PythonEnvironmentConfig(
+                Paths.get(virtualEnv),
+                windowsSitePackages,
+                jepPath,
+                pythonVersion,
+                StringUtils.equals(virtualEnv, activeVirtualEnv)
+            );
         }
 
         List<Path> pythons;

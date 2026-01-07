@@ -67,3 +67,21 @@ Set-Content -LiteralPath $manifest -Value $lines -Encoding ASCII
 Write-Host "OK: Created $outZip" -ForegroundColor Green
 
 
+
+        $stream = [System.IO.File]::OpenRead($_.FullName)
+        try {
+            $bytes = $sha.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha.Dispose()
+    }
+    $h = ([System.BitConverter]::ToString($bytes) -replace "-", "").ToUpperInvariant()
+    $lines.Add("$h  $($_.Name)")
+}
+Set-Content -LiteralPath $manifest -Value $lines -Encoding ASCII
+
+Write-Host "OK: Created $outZip" -ForegroundColor Green
+
+

@@ -95,3 +95,15 @@ if ($expected.Count -gt 0) {
 Write-Host "OK: Windows pdfalto binaries match expected SHA256." -ForegroundColor Green
 
 
+
+        Assert-FileHash -Path (Join-Path $PdfaltoDir $k) -ExpectedSha256 $expected[$k]
+    }
+} else {
+    # Minimal verification when manifest is not yet populated.
+    Assert-FilePresent -Path (Join-Path $PdfaltoDir "pdfalto.exe")
+    Assert-FilePresent -Path (Join-Path $PdfaltoDir "pdfalto_server.exe")
+}
+
+Write-Host "OK: Windows pdfalto binaries match expected SHA256." -ForegroundColor Green
+
+

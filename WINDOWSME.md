@@ -1,19 +1,42 @@
 ## GROBID Native Windows Support (Research Signals fork)
 
-This document tracks work to restore **native Windows support** for GROBID in the Research Signals “GOBRID” fork.
+This document describes the **native Windows support** added in this fork, with a clear separation between:
+
+- **Core (out-of-the-box)**: native Windows service + real PDF processing (requires `pdfalto`)
+- **Optional ML (DeLFT)**: deep learning models via Python/JEP/TensorFlow (explicit opt-in)
 
 Upstream GROBID explicitly calls out Windows as an area needing help:
 
 > "GROBID should run properly 'out of the box' on Linux (64 bits) and macOS (Intel and ARM). **We cannot ensure currently support for Windows as we did before (help welcome!)**"
 
-### Overview
+### Relationship to upstream (Research Signals)
 
-This fork aims to make GROBID run **natively on Windows**, while preserving Linux/macOS behavior.
+- **Baseline**: `Research-Signals/grobid` (forked from `kermitt2/grobid`) does not guarantee native Windows support and often recommends Docker on Windows.
+- **Why this fork exists**: enable a native Windows path for Research Signals development/debugging and contribution workflows.
+- **Compatibility principle**: preserve Linux/macOS behavior; scope Windows changes to platform-guarded code paths where possible.
 
-- **Out-of-the-box scope (Windows, core)**: a Windows user can clone the repo, run the service, and use core endpoints (health + PDF processing) without hand-editing files or applying local patches.
-- **Optional ML scope (DeLFT)**: **available, but not part of the one-command core quickstart**. DeLFT on Windows requires an explicit setup step (Python/JEP/TensorFlow + config), and the repo includes scripts/templates to support that workflow.
+### PR summary (what changed / why it’s maintainable)
 
-Upstream often recommends Docker on Windows for production. This work provides a native Windows option aimed at Research Signals development/debugging and contribution workflows.
+- **Core experience**: `.\gradlew.bat run` provisions and verifies **`pdfalto 0.4`** automatically on Windows (no manual downloads).
+- **Reliability over network variance**: bootstrap prefers a **bundled zip** (deterministic/offline), with optional override URL for enterprise mirrors.
+- **Correct binary selection**: on Windows, GROBID invokes **`pdfalto.exe`** (0.4) to avoid stale/unsupported `pdfalto_server.exe` variants.
+- **Windows-safe execution**: Unix-only flags (`--timeout`, `--ulimit`) are guarded on Windows.
+- **Reviewability**: key behavior is owned by a small set of files (Gradle bootstrap task + one command-selection point in `grobid-core`), plus a clear file map below.
+
+### Scopes (what you get when you clone this repo)
+
+#### Core (out-of-the-box, Windows)
+
+- **Goal**: clone → `.\gradlew.bat run` → health + PDF endpoints work.
+- **Key design choice**: Gradle provisions **`pdfalto 0.4`** with integrity verification (no manual downloads).
+
+#### Optional ML (DeLFT)
+
+- **Goal**: keep core quickstart clean, while enabling DeLFT via an explicit opt-in workflow.
+- **Why it’s opt-in**: DeLFT introduces Python + TensorFlow + native JEP binaries + large model/embedding assets and is not suitable for a “core quickstart” guarantee.
+- **What’s different**: adds Python + TensorFlow + JEP + DeLFT repo + a machine-specific config file (ignored by Git).
+- **Entry point**: `:grobid-service:runDelftWindows` using `grobid-home/config/grobid-delft-windows.yaml` (generated from the template).
+- **DeLFT roadmap**: see `DELFTING.md` for the phase plan.
 
 ### Success criteria (“one-command quickstart”)
 
@@ -41,15 +64,10 @@ Complication: upstream `kermitt2/pdfalto` does **not reliably publish** a Window
 - **Broken behavior**: server-mode added Unix-only flags (`--timeout`, `--ulimit`) that Windows `pdfalto` builds don’t support.
 - **Fix**: guard these flags on Windows (`grobid-core`).
 
-#### 5) `pdfalto_server` is not reliable on Windows for `0.4`
+#### 4) `pdfalto_server` is not reliable on Windows for `0.4`
 
 - **Problem**: GROBID’s “server-mode” historically calls `pdfalto_server` as a separate executable. In practice, for Windows bundles targeting `pdfalto 0.4`, a working `pdfalto_server.exe` is not reliably available (and older builds can accidentally ship a stale `0.1` binary).
 - **Fix**: on Windows we always invoke **`pdfalto.exe`** (0.4) even when GROBID is running in “server mode”. This keeps the fast-path process management (`ProcessPdfToXml`) while ensuring we use the correct version.
-
-#### 4) Process management assumed Unix
-
-- **Broken behavior**: `ProcessRunner.killProcess()` still uses `pkill` and Unix PID reflection.
-- **Status**: still a known limitation; should be replaced by a cross-platform `ProcessHandle` approach in a follow-up.
 
 ## What we implemented in this fork (current behavior)
 
@@ -59,6 +77,7 @@ We added a Gradle task implemented in `buildSrc`:
 
 - `:grobid-service:ensurePdfaltoWindows` (`org.grobid.gradle.EnsurePdfaltoWindowsTask`)
 - `:grobid-service:run` depends on it, so `.\gradlew.bat run` is self-contained on Windows.
+- **Owned by**: `grobid/build.gradle`, `grobid/buildSrc/src/main/groovy/org/grobid/gradle/EnsurePdfaltoWindowsTask.groovy`
 
 **Install source priority order**
 
@@ -76,22 +95,25 @@ We added a Gradle task implemented in `buildSrc`:
 
 **Verification model**
 
-- Preferred: verify SHA256 via `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256` (manifest-driven).
-- If the manifest is missing/empty, bootstrap falls back to a **presence-only** check (this keeps maintainer workflows usable until the manifest is populated).
+- Preferred: verify SHA256 via `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256` (manifest-driven; fails on mismatch).
+- If the manifest is missing/empty (maintainer builds), bootstrap falls back to a **presence-only** check to keep packaging workflows unblocked.
 
 ### 2) Windows-safe `java.library.path`
 
 `grobid/build.gradle` builds `java.library.path` correctly on Windows using `File.pathSeparator`, and uses `grobid-home/lib/win-64` (or `win-32`) for native libs.
 
 It also handles activated `CONDA_PREFIX` / `VIRTUAL_ENV` on Windows using `Lib\...` paths.
+- **Owned by**: `grobid/build.gradle`
 
 ### 3) Windows-safe `pdfalto` flags
 
 In `grobid-core` we guard `--timeout` / `--ulimit` flags in server execution mode on Windows because Windows builds of `pdfalto` do not support them and can exit non-zero.
+- **Owned by**: `grobid/grobid-core/src/main/java/org/grobid/core/document/DocumentSource.java`
 
-### 4) Known limitation: Unix-only `pkill` in process cleanup
+### 4) Windows-safe `pdfalto` executable selection
 
-`ProcessRunner.killProcess()` still uses `pkill` (Unix-only). On Windows this generally becomes a no-op because PID detection is Unix-specific, but it’s still not ideal and should be replaced with a Windows-safe approach (`ProcessHandle`) in a follow-up.
+On Windows, we select `pdfalto.exe` to avoid unreliable/legacy `pdfalto_server.exe` variants.
+- **Owned by**: `grobid/grobid-core/src/main/java/org/grobid/core/document/DocumentSource.java`
 
 ## Quickstart (native Windows, core)
 
@@ -117,23 +139,22 @@ curl.exe -sS http://localhost:8070/api/isalive
 ### Smoke test (fulltext)
 
 ```powershell
-curl.exe -sS -o resp-fulltext.xml -F "input=@grobid-service\src\test\resources\sample1\sample.pdf;type=application/pdf" http://localhost:8070/api/processFulltextDocument
+curl.exe --% -sS -o resp-fulltext.xml -F input=@grobid-service\src\test\resources\sample1\sample.pdf;type=application/pdf http://localhost:8070/api/processFulltextDocument
 ```
 
 ### Strong check: XML parse validity
 
 ```powershell
-[xml]$x = Get-Content .\resp-fulltext.xml
-$x.DocumentElement.Name
+$x = [xml](Get-Content .\resp-fulltext.xml)
+$x.DocumentElement.LocalName
 ```
 
 ## Current status (important)
 
-- The **bootstrap wiring is present** (Gradle task + run dependency).
-- The **bundled zip is present**: `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.zip`
-- The **`.sha256` manifest is populated**: `grobid-home/pdfalto/win-64/pdfalto-win64-0.4.sha256`
+## Status / assumptions
 
-That means: **today**, Windows users can run `.\gradlew.bat run` offline using the committed bundle, and the Gradle bootstrap can verify integrity via the manifest.
+- **pdfalto provisioning**: uses the committed bundle (`pdfalto-win64-0.4.zip`) + verifies via the populated SHA256 manifest (no GitHub/API dependency for `pdfalto` when the bundle is present).
+- **Build-time dependencies**: `.\gradlew.bat run` may still download the Gradle distribution (`gradle-wrapper.properties`) and Maven dependencies on first run unless already cached / mirrored internally.
 
 ## Maintainer workflow: build + package the Windows bundle
 
@@ -154,14 +175,28 @@ Once successfully built, commit **only**:
 ## Design choices (why we did it this way)
 
 - **Gradle-native bootstrap**: no reliance on PowerShell availability for end users; easier to keep cross-platform and testable.
-- **Bundled zip option**: makes the “one-command quickstart” robust against blocked networks and upstream asset churn.
+- **Bundled zip option**: makes Windows `pdfalto` provisioning robust against blocked `api.github.com` / GitHub release downloads and upstream asset churn. (It does not make Gradle/Maven dependency resolution fully offline.)
 - **Manifest-driven SHA verification**: avoids hardcoding file lists and lets the exact runtime DLL set vary (toolchain differences), while still verifying integrity.
 
-## Windows support file inventory (do not delete without updating this doc)
+## Known gaps / follow-ups (intentionally out of scope for the initial Windows restore)
 
-This section is the “source of truth” checklist for Windows enablement in this fork. If you remove/rename any of these, update this list in the same PR.
+- **Process cleanup**: `ProcessRunner.killProcess()` uses Unix `pkill`. The intended replacement is a cross-platform approach based on `ProcessHandle`.
+  - **Owned by**: `grobid/grobid-core/src/main/java/org/grobid/core/process/ProcessRunner.java`
 
-### Core: `pdfalto` (required for real PDF processing)
+## Windows support file map (shared vs scope-specific)
+
+This is the scope-oriented “source of truth” for what’s in the repo. If you remove/rename any of these, update this list in the same PR.
+
+### Shared (core + optional ML)
+
+- **Main config (core defaults)**: `grobid-home/config/grobid.yaml`  
+  - **Purpose**: baseline service config (CRF by default).
+- **Windows libpath handling**: `grobid/build.gradle`  
+  - **Purpose**: Windows-aware `java.library.path` wiring + app run tasks.
+- **Ignore rules**: `grobid/.gitignore`  
+  - **Purpose**: ignore extracted `pdfalto` runtime folder, `.venv`, generated DeLFT config, and JEP DLLs; explicitly allow committing the single `pdfalto-win64-*.zip` bundle.
+
+### Core-only: `pdfalto` bootstrap (required for real PDF processing)
 
 - **Gradle bootstrap task**: `grobid/buildSrc/src/main/groovy/org/grobid/gradle/EnsurePdfaltoWindowsTask.groovy`  
   - **Purpose**: provision `pdfalto 0.4` on Windows during `.\gradlew.bat run` (prefers bundled zip, supports override URL, verifies via `.sha256` manifest).
@@ -178,7 +213,7 @@ This section is the “source of truth” checklist for Windows enablement in th
 - **Optional local helpers**: `grobid-home/scripts/install_pdfalto_windows.ps1` / `.bat`, `verify_pdfalto_windows.ps1` / `.bat`  
   - **Purpose**: local/maintainer-friendly install & verification outside Gradle (should not be required for end users if the Gradle bootstrap works).
 
-### Optional ML: DeLFT / JEP (Windows setup path, not part of core quickstart)
+### Optional ML-only: DeLFT / JEP (explicit opt-in)
 
 - **DeLFT setup (PowerShell)**: `grobid-home/scripts/setup_delft_windows.ps1`  
   - **Purpose**: create `grobid-home/.venv`, install TensorFlow + JEP, clone/register DeLFT, update `grobid.yaml`, and generate a machine-specific config.
@@ -188,17 +223,20 @@ This section is the “source of truth” checklist for Windows enablement in th
   - **Purpose**: checked-in template (no machine-specific paths); copied/generated into `grobid-home/config/grobid-delft-windows.yaml`.
 - **DeLFT config (generated, ignored)**: `grobid-home/config/grobid-delft-windows.yaml`  
   - **Purpose**: local file with absolute paths; intentionally ignored by Git (see `.gitignore`).
+- **DeLFT run task**: `:grobid-service:runDelftWindows` (Gradle)  
+  - **Purpose**: starts grobid-service with the DeLFT-enabled config (keeps core `run` clean).
 - **JEP helper (PowerShell)**: `grobid-home/scripts/install_jep_lib.ps1`  
   - **Purpose**: legacy/standalone helper to install JEP + DeLFT deps into an existing Python environment.
 - **JEP helper wrapper (BAT)**: `grobid-home/scripts/install_jep_lib.bat`  
   - **Purpose**: convenience wrapper to run the PS1 from `cmd.exe`.
 
-### Repo hygiene (prevents committing machine-specific artifacts)
-
-- **Ignore rules**: `grobid/.gitignore`  
-  - **Purpose**: ignore extracted `pdfalto` runtime folder, `.venv`, generated DeLFT config, and JEP DLLs; explicitly allow committing the single `pdfalto-win64-*.zip` bundle.
-
-## Licensing note (important)
+## Licensing note
 
 `pdfalto` is licensed under **GPL-2.0**. Bundling binaries inside an Apache-2.0 project has implications.
 We keep the Windows bundle as a single, clearly documented artifact and treat it as a pragmatic Windows enablement workaround.
+
+## Testing checklist (recommended)
+
+- **Bootstrap**: `.\gradlew.bat :grobid-service:ensurePdfaltoWindows --info` succeeds and verifies SHA256 via `pdfalto-win64-0.4.sha256`.
+- **API**: `/api/isalive` and one PDF endpoint (`processFulltextDocument`) succeed.
+- **Integrity**: tamper with one file in the bundle zip and confirm bootstrap fails (SHA mismatch).

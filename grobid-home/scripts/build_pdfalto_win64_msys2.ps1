@@ -290,3 +290,113 @@ Write-Host "Build completed. Packaging into repo artifact zip + sha256..." -Fore
 
 Write-Host "OK: Built and packaged pdfalto win64 $PdfaltoTag" -ForegroundColor Green
 
+
+  sed -Ei 's@set \( FREETYPE_LIBRARY .*@set ( FREETYPE_LIBRARY freetype)@' CMakeLists.txt || true
+  # MSYS2 ICU uses icuuc + icudt (not "icudata").
+  sed -Ei 's@set \( ICUUC_LIB .*@set ( ICUUC_LIB icuuc)@' CMakeLists.txt || true
+  sed -Ei 's@set \( ICUDATA_LIB .*@set ( ICUDATA_LIB icudt)@' CMakeLists.txt || true
+
+  # xpdf (static) references Windows COM helpers (CoInitialize, IID_*). Ensure final link includes the required system libs.
+  # Ensure the file ends with a newline before appending to avoid CMake parse errors.
+  printf '\n' >> CMakeLists.txt
+  cat >> CMakeLists.txt <<'EOF'
+if(WIN32)
+  target_link_libraries(pdfalto ole32 uuid shell32)
+  # ICU can require additional components depending on build; adding icuin makes linking more robust on MSYS2.
+  target_link_libraries(pdfalto icuuc icudt icuin)
+endif()
+if(TARGET pdfalto)
+  set_property(TARGET pdfalto PROPERTY CXX_STANDARD 17)
+  set_property(TARGET pdfalto PROPERTY CXX_STANDARD_REQUIRED ON)
+endif()
+if(TARGET pdfalto_server)
+  set_property(TARGET pdfalto_server PROPERTY CXX_STANDARD 17)
+  set_property(TARGET pdfalto_server PROPERTY CXX_STANDARD_REQUIRED ON)
+endif()
+EOF
+fi
+
+# Build libpng from the bundled source so it matches pdfalto's internal-struct usage.
+mkdir -p png-build
+/mingw64/bin/cmake -S libs/image/png/src -B png-build -GMSYS\ Makefiles -DCMAKE_BUILD_TYPE=Release -DPNG_SHARED=OFF -DPNG_STATIC=ON
+/mingw64/bin/cmake --build png-build -j2
+pnglib=$(ls -1 png-build/*.a | head -n 1)
+if [ -z "$pnglib" ]; then
+  echo "ERROR: could not find built libpng static library under png-build/"
+  ls -la png-build || true
+  exit 3
+fi
+if [ -f CMakeLists.txt ]; then
+  # Use an absolute path; some CMake/MinGW combinations treat relative *.a paths as -l<name>.
+  pnglib_abs="$(cd "$(dirname "$pnglib")" && pwd)/$(basename "$pnglib")"
+  if [ ! -f "$pnglib_abs" ]; then
+    echo "ERROR: expected libpng at $pnglib_abs but it does not exist"
+    exit 4
+  fi
+  sed -Ei "s@set \\( PNG_LIBRARIES .*@set ( PNG_LIBRARIES ${pnglib_abs})@" CMakeLists.txt || true
+fi
+
+/mingw64/bin/cmake -GMSYS\ Makefiles -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_CXX_STANDARD=14 -DCMAKE_CXX_STANDARD_REQUIRED=ON .
+make -j2
+
+if [ ! -f ./pdfalto.exe ]; then
+  echo "ERROR: build did not produce pdfalto.exe in repo root"
+  exit 2
+fi
+
+mkdir -p "$PDFALTO_OUTDIR"
+cp -f ./pdfalto.exe "$PDFALTO_OUTDIR/pdfalto.exe"
+if [ -f ./pdfalto_server.exe ]; then
+  cp -f ./pdfalto_server.exe "$PDFALTO_OUTDIR/pdfalto_server.exe"
+fi
+
+# Copy dependent DLLs for the binaries from mingw64 runtime
+deps=$(ldd ./pdfalto.exe | awk '{print $3}' | grep -E '^/mingw64/bin/.*\.dll$' | sort -u || true)
+for d in $deps; do
+  bn=$(basename "$d")
+  cp -f "$d" "$PDFALTO_OUTDIR/$bn"
+done
+
+if [ -f ./pdfalto_server.exe ]; then
+  deps2=$(ldd ./pdfalto_server.exe | awk '{print $3}' | grep -E '^/mingw64/bin/.*\.dll$' | sort -u || true)
+  for d in $deps2; do
+    bn=$(basename "$d")
+    cp -f "$d" "$PDFALTO_OUTDIR/$bn"
+  done
+fi
+'@
+
+# IMPORTANT: When passing a multi-line bash script via `bash -lc`, CRLF line endings can
+# break bash parsing (especially lines ending with `\` continuations) and result in
+# errors like "syntax error: unexpected end of file from `if`".
+# Normalize to LF before invoking bash.
+$bashCmd = $bashCmd -replace "`r`n", "`n"
+$bashCmd = $bashCmd -replace "`r", "`n"
+
+# Run in MSYS2 bash.
+# IMPORTANT: passing a large multi-line script via `bash -lc "<script>"` can be brittle on Windows.
+# We instead write the script to a file under the temp work dir and execute it from bash via `cygpath`.
+$bashScriptWin = Join-Path $work "build_pdfalto_win64_msys2.sh"
+# PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM which can break bash parsing.
+# Use .NET to write UTF-8 without BOM (works on both Windows PowerShell 5.1 and PowerShell 7+).
+[System.IO.File]::WriteAllText($bashScriptWin, $bashCmd, (New-Object System.Text.UTF8Encoding($false)))
+$env:PDFALTO_BASH_SCRIPT = $bashScriptWin
+
+$bashWrapper = @'
+set -euo pipefail
+script_unix=$(cygpath -u "$PDFALTO_BASH_SCRIPT")
+bash "$script_unix"
+'@
+$bashWrapper = $bashWrapper -replace "`r`n", "`n"
+$bashWrapper = $bashWrapper -replace "`r", "`n"
+
+& $bash -lc $bashWrapper
+if ($LASTEXITCODE -ne 0) {
+    throw "MSYS2 build failed (exit code $LASTEXITCODE). Not packaging/validating."
+}
+
+Write-Host "Build completed. Packaging into repo artifact zip + sha256..." -ForegroundColor Cyan
+& (Join-Path $repoRoot "grobid-home\\scripts\\package_pdfalto_win64.ps1") -PdfaltoDir $outDir -VersionTag $PdfaltoTag
+
+Write-Host "OK: Built and packaged pdfalto win64 $PdfaltoTag" -ForegroundColor Green
+

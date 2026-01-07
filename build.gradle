@@ -423,6 +423,56 @@ project(":grobid-service") {
         systemProperty "java.library.path", "${javaLibraryPath}"
     }
 
+    // Windows-only: run grobid-service with DeLFT enabled using a dedicated config file.
+    // This keeps the default `run` task as the core/non-ML quickstart.
+    tasks.register('runDelftWindows', JavaExec) {
+        group = 'application'
+        description = 'Run grobid-service on Windows with DeLFT enabled (grobid-home/config/grobid-delft-windows.yaml).'
+
+        onlyIf { System.getProperty("os.name").toLowerCase().contains("windows") }
+        dependsOn tasks.named('classes')
+        dependsOn tasks.named('ensurePdfaltoWindows')
+
+        classpath = sourceSets.main.runtimeClasspath
+        mainClass = mainClassName
+        workingDir = rootProject.rootDir
+
+        def configFile = rootProject.file("grobid-home/config/grobid-delft-windows.yaml")
+        doFirst {
+            if (!configFile.exists()) {
+                throw new GradleException(
+                    "Missing DeLFT config: ${configFile}. " +
+                    "Run grobid-home/scripts/setup_delft_windows.ps1 (or copy grobid-delft-windows.example.yaml -> grobid-delft-windows.yaml)."
+                )
+            }
+        }
+        args "server", configFile.absolutePath
+
+        // Match the same JVM opens used by `run`.
+        if (JavaVersion.current().compareTo(JavaVersion.VERSION_1_8) > 0) {
+            jvmArgs "--add-opens", "java.base/java.lang=ALL-UNNAMED"
+        }
+
+        // Extend java.library.path so JEP can load its native DLL from the venv created by setup_delft_windows.ps1.
+        // Note: DeLFT is optional; this path is only used when explicitly running this task.
+        doFirst {
+            def javaLibraryPath = getJavaLibraryPath()
+            def venv = rootProject.file("grobid-home/.venv")
+            def jepDir = rootProject.file("grobid-home/.venv/Lib/site-packages/jep")
+            if (venv.exists()) {
+                // Some native deps (and JEP itself) can live under Lib/ and Lib/site-packages/jep
+                def winLib = rootProject.file("grobid-home/.venv/Lib")
+                if (winLib.exists()) {
+                    javaLibraryPath = javaLibraryPath + File.pathSeparator + winLib.absolutePath
+                }
+                if (jepDir.exists()) {
+                    javaLibraryPath = javaLibraryPath + File.pathSeparator + jepDir.absolutePath
+                }
+            }
+            systemProperty "java.library.path", "${javaLibraryPath}"
+        }
+    }
+
     // Make `.\gradlew.bat run` self-contained on Windows by ensuring pdfalto is installed first.
     tasks.run.dependsOn tasks.named('ensurePdfaltoWindows')
 

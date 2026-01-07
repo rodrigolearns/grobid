@@ -506,5 +506,3 @@ class EnsurePdfaltoWindowsTask extends DefaultTask {
         return sb.toString()
     }
 }
-
-
